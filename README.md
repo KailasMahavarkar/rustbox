@@ -1,4 +1,4 @@
-# Mini-Isolate
+# Mini-Isolate (NOT PROD READY)
 
 A Rust-based secure sandbox for executing untrusted code safely, inspired by IOI isolate.
 
