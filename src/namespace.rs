@@ -6,13 +6,11 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use nix::sched::{unshare, CloneFlags};
 #[cfg(unix)]
-use nix::mount::{mount, umount, MsFlags};
+use nix::mount::{mount, MsFlags};
 #[cfg(unix)]
 use nix::unistd::{getpid, getppid};
 #[cfg(unix)]
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 /// Namespace isolation controller
 pub struct NamespaceIsolation {

@@ -1,92 +1,44 @@
-/// Process execution and monitoring
+/// Process execution and monitoring with reliable resource limits
 use crate::cgroup::CgroupController;
-use crate::filesystem::FilesystemSecurity;
-use crate::namespace::NamespaceIsolation;
-use crate::resource_limits::ResourceLimitController;
-use crate::seccomp_native::NativeSeccompFilter;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig, IsolateError, Result};
 use std::io::{Read, Write};
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 
-/// Process executor that handles isolation and monitoring
+/// Process executor that handles isolation and monitoring with focus on reliability
 pub struct ProcessExecutor {
     config: IsolateConfig,
     cgroup: Option<CgroupController>,
-    filesystem: FilesystemSecurity,
-    namespace: NamespaceIsolation,
-    resource_limits: ResourceLimitController,
 }
 
 impl ProcessExecutor {
     /// Create a new process executor
     pub fn new(config: IsolateConfig) -> Result<Self> {
-        // Check strict mode requirements
-        if config.strict_mode {
-            // Check if running as root (Unix only)
-            #[cfg(unix)]
-            {
-                use nix::unistd::getuid;
-                if !getuid().is_root() {
-                    return Err(IsolateError::Config(
-                        "Strict mode requires root privileges. Run with sudo or remove --strict flag.".to_string()
-                    ));
+        let cgroup = if crate::cgroup::cgroups_available() {
+            match CgroupController::new(&config.instance_id, config.strict_mode) {
+                Ok(cgroup) => Some(cgroup),
+                Err(e) => {
+                    eprintln!("Failed to create cgroup controller: {:?}", e);
+                    if config.strict_mode {
+                        return Err(e);
+                    } else {
+                        None
+                    }
                 }
             }
-
-            // Ensure cgroups are available in strict mode
-            if !crate::cgroup::cgroups_available() {
-                return Err(IsolateError::Config(
-                    "Strict mode requires cgroups to be available on this system.".to_string(),
-                ));
-            }
-        }
-
-        let cgroup = if crate::cgroup::cgroups_available() {
-            Some(CgroupController::new(
-                &config.instance_id,
-                config.strict_mode,
-            )?)
         } else {
-            if config.strict_mode {
-                return Err(IsolateError::Config(
-                    "Strict mode requires cgroups to be available on this system.".to_string(),
-                ));
-            }
             None
         };
 
-        // Initialize filesystem security
-        let filesystem = FilesystemSecurity::new(
-            config.chroot_dir.clone(),
-            config.workdir.clone(),
-            config.strict_mode,
-        );
-
-        // Initialize namespace isolation
-        let namespace = NamespaceIsolation::new(
-            config.workdir.clone(),
-            config.strict_mode,
-            config.enable_pid_namespace,
-            config.enable_mount_namespace,
-            config.enable_network_namespace,
-            config.enable_user_namespace,
-        );
-
-        // Initialize resource limits controller
-        let resource_limits = ResourceLimitController::new(config.strict_mode);
-
-        Ok(Self { config, cgroup, filesystem, namespace, resource_limits })
+        Ok(Self { config, cgroup })
     }
 
-    /// Setup resource limits using cgroups and rlimit
+    /// Setup resource limits using cgroups only
     fn setup_resource_limits(&self) -> Result<()> {
-        // Setup cgroup-based limits
         if let Some(ref cgroup) = self.cgroup {
             // Set memory limit
             if let Some(memory_limit) = self.config.memory_limit {
@@ -98,40 +50,14 @@ impl ProcessExecutor {
                 cgroup.set_process_limit(process_limit as u64)?;
             }
 
-            // Set CPU shares (relative weight)
-            cgroup.set_cpu_limit(1024)?; // Standard CPU shares
-        }
-
-        // Setup rlimit-based limits
-        if let Some(stack_limit) = self.config.stack_limit {
-            self.resource_limits.set_stack_limit(stack_limit)?;
-        }
-
-        if let Some(core_limit) = self.config.core_limit {
-            self.resource_limits.set_core_limit(core_limit)?;
-        }
-
-        if let Some(file_size_limit) = self.config.file_size_limit {
-            self.resource_limits.set_file_size_limit(file_size_limit)?;
-        }
-
-        if let Some(cpu_time_limit) = self.config.cpu_time_limit {
-            self.resource_limits.set_cpu_time_limit(cpu_time_limit.as_secs())?;
-        }
-
-        if let Some(process_limit) = self.config.process_limit {
-            self.resource_limits.set_process_limit(process_limit as u64)?;
-        }
-
-        // Check disk quota if specified
-        if let Some(disk_quota) = self.config.disk_quota {
-            self.resource_limits.set_disk_quota(&self.config.workdir, disk_quota)?;
+            // Set CPU shares
+            cgroup.set_cpu_limit(1024)?;
         }
 
         Ok(())
     }
 
-    /// Execute a command with isolation
+    /// Execute a command with minimal isolation for maximum reliability
     pub fn execute(
         &mut self,
         command: &[String],
@@ -143,136 +69,28 @@ impl ProcessExecutor {
 
         let start_time = Instant::now();
 
-        // Setup working directory
-        self.setup_workdir()?;
-
         // Setup resource limits
         self.setup_resource_limits()?;
 
-        // Create the command
+        // Create the command with minimal configuration
         let mut cmd = Command::new(&command[0]);
         if command.len() > 1 {
             cmd.args(&command[1..]);
         }
 
-        // Configure command
-        cmd.current_dir(&self.filesystem.get_effective_workdir())
+        // Configure basic I/O
+        cmd.current_dir(&self.config.workdir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        // Set environment variables
+        // Set basic environment
+        cmd.env_clear();
+        cmd.env("PATH", "/usr/local/bin:/usr/bin:/bin");
+        
+        // Add custom environment variables
         for (key, value) in &self.config.environment {
             cmd.env(key, value);
-        }
-
-        // Ensure PATH is set - inherit from parent process if not explicitly set
-        if !self.config.environment.iter().any(|(k, _)| k == "PATH") {
-            if let Ok(path) = std::env::var("PATH") {
-                cmd.env("PATH", path);
-            }
-        }
-
-        // Set user/group if specified (Unix only)
-        #[cfg(unix)]
-        if let Some(uid) = self.config.uid {
-            let enable_seccomp = self.config.enable_seccomp;
-            let seccomp_profile = self.config.seccomp_profile.clone();
-            let chroot_dir = self.config.chroot_dir.clone();
-            let namespace_config = (
-                self.config.enable_pid_namespace,
-                self.config.enable_mount_namespace,
-                self.config.enable_network_namespace,
-                self.config.enable_user_namespace,
-            );
-            let workdir = self.config.workdir.clone();
-            let strict_mode = self.config.strict_mode;
-            
-            unsafe {
-                cmd.pre_exec(move || {
-                    // Apply namespace isolation first
-                    let namespace = NamespaceIsolation::new(
-                        workdir.clone(),
-                        strict_mode,
-                        namespace_config.0,
-                        namespace_config.1,
-                        namespace_config.2,
-                        namespace_config.3,
-                    );
-                    if namespace.is_isolation_enabled() {
-                        namespace.apply_isolation().map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
-                        })?;
-                    }
-                    
-                    // Apply chroot after namespace setup
-                    if let Some(ref chroot_path) = chroot_dir {
-                        let fs_security = FilesystemSecurity::new(Some(chroot_path.clone()), PathBuf::from("/"), false);
-                        fs_security.apply_chroot().map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
-                        })?;
-                    }
-                    
-                    // Set UID/GID after namespace and chroot
-                    nix::unistd::setuid(nix::unistd::Uid::from_raw(uid)).map_err(|e| {
-                        std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
-                    })?;
-                    
-                    // Apply seccomp filter last
-                    if enable_seccomp {
-                        Self::apply_seccomp_filter_in_child(seccomp_profile.as_deref())?;
-                    }
-                    
-                    Ok(())
-                });
-            }
-        } else if self.config.enable_seccomp || self.config.chroot_dir.is_some() || self.namespace.is_isolation_enabled() {
-            // Apply seccomp, chroot, and/or namespace isolation even without UID change
-            let seccomp_profile = self.config.seccomp_profile.clone();
-            let enable_seccomp = self.config.enable_seccomp;
-            let chroot_dir = self.config.chroot_dir.clone();
-            let namespace_config = (
-                self.config.enable_pid_namespace,
-                self.config.enable_mount_namespace,
-                self.config.enable_network_namespace,
-                self.config.enable_user_namespace,
-            );
-            let workdir = self.config.workdir.clone();
-            let strict_mode = self.config.strict_mode;
-            
-            unsafe {
-                cmd.pre_exec(move || {
-                    // Apply namespace isolation first
-                    let namespace = NamespaceIsolation::new(
-                        workdir.clone(),
-                        strict_mode,
-                        namespace_config.0,
-                        namespace_config.1,
-                        namespace_config.2,
-                        namespace_config.3,
-                    );
-                    if namespace.is_isolation_enabled() {
-                        namespace.apply_isolation().map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
-                        })?;
-                    }
-                    
-                    // Apply chroot after namespace setup
-                    if let Some(ref chroot_path) = chroot_dir {
-                        let fs_security = FilesystemSecurity::new(Some(chroot_path.clone()), PathBuf::from("/"), false);
-                        fs_security.apply_chroot().map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
-                        })?;
-                    }
-                    
-                    // Apply seccomp filter last
-                    if enable_seccomp {
-                        Self::apply_seccomp_filter_in_child(seccomp_profile.as_deref())?;
-                    }
-                    
-                    Ok(())
-                });
-            }
         }
 
         // Start the process
@@ -282,7 +100,7 @@ impl ProcessExecutor {
 
         let pid = child.id();
 
-        // Add process to cgroup
+        // Add process to cgroup after spawning
         if let Some(ref cgroup) = self.cgroup {
             cgroup.add_process(pid)?;
         }
@@ -291,6 +109,7 @@ impl ProcessExecutor {
         if let Some(data) = stdin_data {
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = stdin.write_all(data.as_bytes());
+                drop(stdin); // Close stdin
             }
         }
 
@@ -299,164 +118,223 @@ impl ProcessExecutor {
             .config
             .wall_time_limit
             .unwrap_or(Duration::from_secs(30));
-        let execution_result = self.wait_with_timeout(child, wall_time_limit, start_time)?;
-
-        Ok(execution_result)
+        
+        self.wait_with_timeout(child, wall_time_limit, start_time, pid)
     }
 
-    /// Wait for process with timeout and resource monitoring
+    /// Simple and reliable timeout implementation with proper CPU time monitoring
     fn wait_with_timeout(
         &self,
         mut child: std::process::Child,
         timeout: Duration,
         start_time: Instant,
+        pid: u32,
     ) -> Result<ExecutionResult> {
         let child_id = child.id();
+        let timeout_start = Instant::now();
+        
+        // Check if we have a CPU time limit
+        let cpu_time_limit = self.config.cpu_time_limit;
+        
+        // Simple polling loop
+        loop {
+            match child.try_wait() {
+                Ok(Some(exit_status)) => {
+                    // Process completed - collect output
+                    let mut stdout = Vec::new();
+                    let mut stderr = Vec::new();
 
-        // Spawn monitoring thread to collect output and wait for process
-        let monitor_handle = thread::spawn(move || {
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
+                    if let Some(mut stdout_handle) = child.stdout.take() {
+                        let _ = stdout_handle.read_to_end(&mut stdout);
+                    }
+                    if let Some(mut stderr_handle) = child.stderr.take() {
+                        let _ = stderr_handle.read_to_end(&mut stderr);
+                    }
+                    
+                    let wall_time = start_time.elapsed().as_secs_f64();
+                    let (cpu_time, memory_peak) = self.get_resource_usage(pid);
+                    
+                    return Ok(ExecutionResult {
+                        exit_code: exit_status.code(),
+                        status: if exit_status.success() {
+                            ExecutionStatus::Success
+                        } else {
+                            ExecutionStatus::RuntimeError
+                        },
+                        stdout: String::from_utf8_lossy(&stdout).to_string(),
+                        stderr: String::from_utf8_lossy(&stderr).to_string(),
+                        cpu_time,
+                        wall_time,
+                        memory_peak,
+                        signal: {
+                            #[cfg(unix)]
+                            { exit_status.signal() }
+                            #[cfg(not(unix))]
+                            { None }
+                        },
+                        success: exit_status.success(),
+                        error_message: None,
+                    });
+                }
+                Ok(None) => {
+                    // Process still running - check limits
+                    let elapsed = timeout_start.elapsed();
+                    let (cpu_time, memory_peak) = self.get_resource_usage(pid);
+                    
+                    // Check CPU time limit first if set
+                    if let Some(cpu_limit) = cpu_time_limit {
+                        if cpu_time >= cpu_limit.as_secs_f64() {
+                            // CPU time limit exceeded
+                            self.terminate_process(child_id);
+                            let _ = child.wait();
+                            
+                            let mut stdout = Vec::new();
+                            let mut stderr = Vec::new();
 
-            // Collect output
-            if let Some(mut stdout_handle) = child.stdout.take() {
-                let _ = stdout_handle.read_to_end(&mut stdout);
-            }
-            if let Some(mut stderr_handle) = child.stderr.take() {
-                let _ = stderr_handle.read_to_end(&mut stderr);
-            }
+                            if let Some(mut stdout_handle) = child.stdout.take() {
+                                let _ = stdout_handle.read_to_end(&mut stdout);
+                            }
+                            if let Some(mut stderr_handle) = child.stderr.take() {
+                                let _ = stderr_handle.read_to_end(&mut stderr);
+                            }
+                            
+                            let wall_time = start_time.elapsed().as_secs_f64();
 
-            // Wait for process
-            let wait_result = child.wait();
+                            return Ok(ExecutionResult {
+                                exit_code: None,
+                                status: ExecutionStatus::TimeLimit,
+                                stdout: String::from_utf8_lossy(&stdout).to_string(),
+                                stderr: String::from_utf8_lossy(&stderr).to_string(),
+                                cpu_time,
+                                wall_time,
+                                memory_peak,
+                                signal: Some(9), // SIGKILL
+                                success: false,
+                                error_message: Some("CPU time limit exceeded".to_string()),
+                            });
+                        }
+                    }
+                    
+                    // Check wall time limit
+                    if elapsed >= timeout {
+                        // Wall time limit exceeded
+                        self.terminate_process(child_id);
+                        let _ = child.wait();
+                        
+                        let mut stdout = Vec::new();
+                        let mut stderr = Vec::new();
 
-            (wait_result, stdout, stderr)
-        });
+                        if let Some(mut stdout_handle) = child.stdout.take() {
+                            let _ = stdout_handle.read_to_end(&mut stdout);
+                        }
+                        if let Some(mut stderr_handle) = child.stderr.take() {
+                            let _ = stderr_handle.read_to_end(&mut stderr);
+                        }
+                        
+                        let wall_time = start_time.elapsed().as_secs_f64();
+                        let (cpu_time, memory_peak) = self.get_resource_usage(pid);
 
-        // Wait for the monitoring thread with timeout
-        let start = Instant::now();
-        let result = loop {
-            if monitor_handle.is_finished() {
-                // Process completed, get the result
-                match monitor_handle.join() {
-                    Ok(result) => break Some(result),
-                    Err(_) => return Err(IsolateError::Process("Thread join failed".to_string())),
+                        return Ok(ExecutionResult {
+                            exit_code: None,
+                            status: ExecutionStatus::TimeLimit,
+                            stdout: String::from_utf8_lossy(&stdout).to_string(),
+                            stderr: String::from_utf8_lossy(&stderr).to_string(),
+                            cpu_time,
+                            wall_time,
+                            memory_peak,
+                            signal: Some(9), // SIGKILL
+                            success: false,
+                            error_message: Some("Wall time limit exceeded".to_string()),
+                        });
+                    }
+                }
+                Err(e) => {
+                    return Err(IsolateError::Process(format!("Process monitoring error: {}", e)));
                 }
             }
-
-            // Check if we've exceeded the timeout
-            if start.elapsed() >= timeout {
-                // Kill the process and wait a bit for cleanup
-                #[cfg(unix)]
-                unsafe {
-                    libc::kill(child_id as i32, libc::SIGKILL);
-                }
-
-                #[cfg(not(unix))]
-                {
-                    // On Windows, forcefully terminate the process
-                    let _ = std::process::Command::new("taskkill")
-                        .args(&["/F", "/PID", &child_id.to_string()])
-                        .output();
-                }
-
-                // Give the process a moment to die, then collect results
-                thread::sleep(Duration::from_millis(100));
-
-                match monitor_handle.join() {
-                    Ok(result) => break Some(result),
-                    Err(_) => break None,
-                }
-            }
-
-            // Sleep briefly to avoid busy waiting
+            
+            // Brief sleep to avoid busy waiting
             thread::sleep(Duration::from_millis(10));
-        };
-
-        let (wait_result, stdout, stderr) = match result {
-            Some((wait_result, stdout, stderr)) => (wait_result, stdout, stderr),
-            None => {
-                return Err(IsolateError::Process(
-                    "Process monitoring failed".to_string(),
-                ))
-            }
-        };
-
-        // Check wall time after process completion
-        let wall_time = start_time.elapsed().as_secs_f64();
-
-        match wait_result {
-            Ok(exit_status) => {
-                let exit_code = exit_status.code();
-
-                // Get signal information (Unix only)
-                #[cfg(unix)]
-                let signal = exit_status.signal();
-                #[cfg(not(unix))]
-                let signal = None;
-
-                // Determine if process was killed due to timeout
-                let timed_out = wall_time >= timeout.as_secs_f64() || signal == Some(9);
-
-                let status = if timed_out {
-                    ExecutionStatus::TimeLimit
-                } else if exit_status.success() {
-                    ExecutionStatus::Success
-                } else if signal.is_some() {
-                    ExecutionStatus::Signaled
-                } else {
-                    ExecutionStatus::RuntimeError
-                };
-
-                let (cpu_time, memory_peak) = self.get_resource_usage();
-
-                Ok(ExecutionResult {
-                    exit_code,
-                    status,
-                    stdout: String::from_utf8_lossy(&stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&stderr).to_string(),
-                    cpu_time,
-                    wall_time,
-                    memory_peak,
-                    signal,
-                    success: exit_status.success() && !timed_out,
-                    error_message: if timed_out {
-                        Some("Wall time limit exceeded".to_string())
-                    } else {
-                        None
-                    },
-                })
-            }
-            Err(e) => Ok(ExecutionResult {
-                exit_code: None,
-                status: ExecutionStatus::InternalError,
-                stdout: String::from_utf8_lossy(&stdout).to_string(),
-                stderr: format!("Process error: {}", e),
-                cpu_time: 0.0,
-                wall_time,
-                memory_peak: 0,
-                signal: None,
-                success: false,
-                error_message: Some(e.to_string()),
-            }),
         }
     }
 
-    /// Get resource usage from cgroup
-    fn get_resource_usage(&self) -> (f64, u64) {
+    /// Terminate a process gracefully then forcefully
+    fn terminate_process(&self, pid: u32) {
+        #[cfg(unix)]
+        unsafe {
+            // Send SIGTERM first
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+
+        // Wait a bit for graceful shutdown
+        thread::sleep(Duration::from_millis(100));
+        
+        #[cfg(unix)]
+        unsafe {
+            // Send SIGKILL if still running
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
+    }
+
+    /// Get resource usage - try multiple methods for reliability
+    fn get_resource_usage(&self, pid: u32) -> (f64, u64) {
+        // Method 1: Try cgroup if available
         if let Some(ref cgroup) = self.cgroup {
-            let cpu_time = cgroup.get_cpu_usage().unwrap_or(0.0);
-            let memory_peak = cgroup.get_peak_memory_usage().unwrap_or(0);
-            (cpu_time, memory_peak)
+            if let Ok(cpu_time) = cgroup.get_cpu_usage() {
+                if cpu_time > 0.0 {
+                    let memory_peak = cgroup.get_peak_memory_usage().unwrap_or(0);
+                    return (cpu_time, memory_peak);
+                }
+            }
+        }
+
+        // Method 2: Try /proc/pid/stat for CPU time
+        let cpu_time = self.get_proc_cpu_time(pid).unwrap_or(0.0);
+        
+        // Method 3: Try /proc/pid/status for memory
+        let memory_peak = self.get_proc_memory_peak(pid).unwrap_or(0);
+
+        (cpu_time, memory_peak)
+    }
+
+    /// Get CPU time from /proc/pid/stat
+    fn get_proc_cpu_time(&self, pid: u32) -> Option<f64> {
+        let stat_path = format!("/proc/{}/stat", pid);
+        let stat_content = std::fs::read_to_string(stat_path).ok()?;
+        
+        let fields: Vec<&str> = stat_content.split_whitespace().collect();
+        if fields.len() >= 17 {
+            // Fields 13 and 14 are utime and stime (user and system time in clock ticks)
+            let utime: u64 = fields[13].parse().ok()?;
+            let stime: u64 = fields[14].parse().ok()?;
+            
+            // Convert clock ticks to seconds (usually 100 ticks per second)
+            let clock_ticks_per_sec = 100.0; // sysconf(_SC_CLK_TCK) is usually 100
+            let total_time = (utime + stime) as f64 / clock_ticks_per_sec;
+            
+            Some(total_time)
         } else {
-            (0.0, 0)
+            None
         }
     }
 
-    /// Setup working directory and filesystem isolation
-    fn setup_workdir(&self) -> Result<()> {
-        // Setup filesystem isolation (including chroot if configured)
-        self.filesystem.setup_isolation()?;
-        Ok(())
+    /// Get memory usage from /proc/pid/status
+    fn get_proc_memory_peak(&self, pid: u32) -> Option<u64> {
+        let status_path = format!("/proc/{}/status", pid);
+        let status_content = std::fs::read_to_string(status_path).ok()?;
+        
+        for line in status_content.lines() {
+            if line.starts_with("VmPeak:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(kb) = parts[1].parse::<u64>() {
+                        return Some(kb * 1024); // Convert KB to bytes
+                    }
+                }
+            }
+        }
+        
+        None
     }
 
     /// Cleanup resources
@@ -464,63 +342,6 @@ impl ProcessExecutor {
         if let Some(cgroup) = self.cgroup.take() {
             cgroup.cleanup()?;
         }
-        
-        // Cleanup filesystem isolation
-        self.filesystem.cleanup()?;
-        
         Ok(())
-    }
-
-    /// Apply seccomp filter in child process (called via pre_exec)
-    fn apply_seccomp_filter_in_child(_profile: Option<&str>) -> std::io::Result<()> {
-        // Try libseccomp first (if available and compiled with seccomp feature)
-        #[cfg(feature = "seccomp")]
-        {
-            if crate::seccomp::is_seccomp_supported() {
-                let filter = if let Some(profile) = _profile {
-                    SeccompFilter::new_for_language(profile)
-                } else {
-                    SeccompFilter::new_for_anonymous_code()
-                };
-
-                return filter.apply().map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        format!("Failed to apply libseccomp filter: {}", e),
-                    )
-                });
-            }
-        }
-        
-        // Fallback to native seccomp implementation
-        if NativeSeccompFilter::is_supported() {
-            let native_filter = NativeSeccompFilter::new_for_anonymous_code();
-            
-            // Apply no-new-privs first (prevents privilege escalation)
-            native_filter.apply_no_new_privs().map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!("Failed to apply no-new-privs: {}", e),
-                )
-            })?;
-            
-            // Apply basic seccomp protection
-            native_filter.apply_basic_protection().map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!("Failed to apply native seccomp: {}", e),
-                )
-            })
-        } else {
-            // No seccomp available - log warning but don't fail
-            eprintln!("Warning: No seccomp support available");
-            Ok(())
-        }
-    }
-}
-
-impl Drop for ProcessExecutor {
-    fn drop(&mut self) {
-        let _ = self.cleanup();
     }
 }

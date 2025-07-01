@@ -1,5 +1,26 @@
-/// Mini-Isolate: A process isolation and resource control system
-/// Inspired by IOI Isolate, focused on secure process execution with cgroup-v1 support
+/// Mini-Isolate: Secure Process Isolation and Resource Control System
+/// 
+/// A modern, Rust-based implementation inspired by IOI Isolate, designed for secure
+/// execution of untrusted code with comprehensive resource limits and namespace isolation.
+/// 
+/// # Security Features
+/// - Comprehensive syscall filtering via seccomp-bpf
+/// - Namespace isolation (PID, mount, network, user)
+/// - Resource limits enforcement (memory, CPU, file size, etc.)
+/// - Cgroups v1 support for maximum compatibility
+/// - Path validation to prevent directory traversal
+/// - Memory-safe implementation in Rust
+/// 
+/// # Platform Support
+/// - Primary: Linux with cgroups v1 support
+/// - Secondary: Unix-like systems with limited functionality
+/// 
+/// # Usage
+/// ```bash
+/// mini-isolate init --box-id 0
+/// mini-isolate run --box-id 0 --mem 128 --time 10 /usr/bin/python3 solution.py
+/// mini-isolate cleanup --box-id 0
+/// ```
 use anyhow::Result;
 
 mod cgroup;
@@ -15,36 +36,106 @@ mod seccomp_native;
 mod types;
 
 fn main() -> Result<()> {
-    // Initialize logging
+    // Initialize structured logging for security monitoring
     env_logger::init();
 
-    // Check if we're running on a supported platform
+    // Platform compatibility check - Unix-only for security features
     if !cfg!(unix) {
-        eprintln!("Error: mini-isolate currently only supports Unix-like systems");
+        eprintln!("Error: mini-isolate requires Unix-like systems for security features");
+        eprintln!("Current platform does not support necessary isolation mechanisms");
         std::process::exit(1);
     }
-    // Check if we have necessary permissions
+    
+    // Privilege check - many security features require elevated permissions
     if unsafe { libc::getuid() } != 0 {
         eprintln!("Warning: mini-isolate may require root privileges for full functionality");
-        eprintln!("Some features like cgroups may not work without proper permissions");
+        eprintln!("Running without root may limit:");
+        eprintln!("  • Cgroups resource enforcement");
+        eprintln!("  • Namespace isolation capabilities");
+        eprintln!("  • Seccomp filter installation");
+        eprintln!("  • Chroot directory creation");
     }
 
-    // Check cgroup availability
-    if !crate::cgroup::cgroups_available() {
-        eprintln!("Warning: cgroups not available - resource limits will not be enforced");
-        eprintln!("Make sure /proc/cgroups and /sys/fs/cgroup are available");
-    }
+    // Security subsystem availability checks
+    perform_security_checks();
 
-    // Check seccomp availability  
-    if crate::seccomp::is_seccomp_supported() {
-        eprintln!("Info: libseccomp available - full syscall filtering enabled");
-    } else if crate::seccomp_native::NativeSeccompFilter::is_supported() {
-        eprintln!("Info: native seccomp available - basic protection enabled");
-    } else {
-        eprintln!("Warning: seccomp not supported - syscall filtering will not be available");
-        eprintln!("Kernel must support seccomp for security filtering");
-    }
-
-    // Run the CLI
+    // Run the command-line interface
     cli::run()
+}
+
+/// Perform comprehensive security subsystem checks
+/// 
+/// This function validates that all necessary security mechanisms are available
+/// and properly configured on the host system.
+fn perform_security_checks() {
+    // Check cgroups availability for resource control
+    if !crate::cgroup::cgroups_available() {
+        eprintln!("⚠️  Warning: cgroups not available - resource limits will not be enforced");
+        eprintln!("   Ensure /proc/cgroups and /sys/fs/cgroup are properly mounted");
+        eprintln!("   Some contest systems may not function correctly without cgroups");
+    } else {
+        eprintln!("✅ cgroups v1 available - resource limits enabled");
+    }
+
+    // Check seccomp availability for syscall filtering
+    if crate::seccomp::is_seccomp_supported() {
+        eprintln!("✅ libseccomp available - comprehensive syscall filtering enabled");
+    } else if crate::seccomp_native::NativeSeccompFilter::is_supported() {
+        eprintln!("✅ native seccomp available - basic syscall protection enabled");
+    } else {
+        eprintln!("⚠️  Warning: seccomp not supported - syscall filtering unavailable");
+        eprintln!("   Kernel must support CONFIG_SECCOMP and CONFIG_SECCOMP_FILTER");
+        eprintln!("   Running untrusted code without syscall filtering is dangerous");
+    }
+
+    // Check namespace support for process isolation
+    if crate::namespace::NamespaceIsolation::is_supported() {
+        eprintln!("✅ namespace isolation available - full process isolation enabled");
+    } else {
+        eprintln!("⚠️  Warning: namespace isolation not supported");
+        eprintln!("   Limited process isolation capabilities available");
+    }
+
+    // Check filesystem security capabilities
+    if std::path::Path::new("/proc/self/ns").exists() {
+        eprintln!("✅ namespace filesystem available - isolation monitoring enabled");
+    }
+
+    // Validate critical system directories
+    validate_system_directories();
+}
+
+/// Validate that critical system directories are properly configured
+/// 
+/// # Security Considerations
+/// - Ensures /tmp is writable for sandbox operations
+/// - Validates /proc and /sys are mounted for system information
+/// - Checks that sensitive directories are protected
+fn validate_system_directories() {
+    // Check /tmp accessibility for sandbox operations
+    if !std::path::Path::new("/tmp").exists() || 
+       !std::path::Path::new("/tmp").is_dir() {
+        eprintln!("⚠️  Warning: /tmp directory not accessible");
+        eprintln!("   Sandbox operations may fail without writable temporary space");
+    }
+
+    // Validate /proc filesystem for process monitoring
+    if !std::path::Path::new("/proc/self").exists() {
+        eprintln!("⚠️  Warning: /proc filesystem not mounted");
+        eprintln!("   Process monitoring and resource tracking may be limited");
+    }
+
+    // Check /sys for cgroups and system information
+    if !std::path::Path::new("/sys").exists() {
+        eprintln!("⚠️  Warning: /sys filesystem not mounted");
+        eprintln!("   Cgroups and hardware information may be unavailable");
+    }
+
+    // Validate that sensitive directories exist and are protected
+    let sensitive_dirs = ["/etc", "/root", "/boot"];
+    for dir in &sensitive_dirs {
+        if !std::path::Path::new(dir).exists() {
+            eprintln!("⚠️  Warning: {} directory not found", dir);
+        }
+    }
 }

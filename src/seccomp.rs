@@ -1,6 +1,6 @@
 /// Security module implementing seccomp-bpf syscall filtering
 /// Provides defense against malicious code by blocking dangerous system calls
-use crate::types::{IsolateError, Result};
+use crate::types::Result;
 use std::collections::HashSet;
 
 #[cfg(feature = "seccomp")]
@@ -122,20 +122,20 @@ impl SeccompFilter {
         {
             // Initialize seccomp context with default kill action
             let mut ctx = ScmpFilterContext::new_filter(self.default_action)
-                .map_err(|e| IsolateError::Config(format!("Failed to create seccomp context: {}", e)))?;
+                .map_err(|e| crate::types::IsolateError::Config(format!("Failed to create seccomp context: {}", e)))?;
             
             // Add rules for allowed syscalls
             for syscall_name in &self.allowed_syscalls {
                 let syscall = ScmpSyscall::from_name(syscall_name)
-                    .map_err(|e| IsolateError::Config(format!("Unknown syscall '{}': {}", syscall_name, e)))?;
+                    .map_err(|e| crate::types::IsolateError::Config(format!("Unknown syscall '{}': {}", syscall_name, e)))?;
                 
                 ctx.add_rule(ScmpAction::Allow, syscall)
-                    .map_err(|e| IsolateError::Config(format!("Failed to add rule for {}: {}", syscall_name, e)))?;
+                    .map_err(|e| crate::types::IsolateError::Config(format!("Failed to add rule for {}: {}", syscall_name, e)))?;
             }
             
             // Load the filter into the kernel
             ctx.load()
-                .map_err(|e| IsolateError::Config(format!("Failed to load seccomp filter: {}", e)))?;
+                .map_err(|e| crate::types::IsolateError::Config(format!("Failed to load seccomp filter: {}", e)))?;
             
             log::info!("Seccomp filter applied successfully with {} allowed syscalls", self.allowed_syscalls.len());
         }

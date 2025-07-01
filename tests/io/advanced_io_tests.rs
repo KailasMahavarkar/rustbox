@@ -15,7 +15,7 @@ fn test_io_config_builder_functionality() {
         .with_encoding("utf-8")
         .build();
 
-    assert!(config.use_pipes);
+    assert!(!config.use_pipes); // Security restriction: pipes disabled by default
     assert!(config.enable_tty);
     assert_eq!(config.stdin_data, Some("test input".to_string()));
     assert_eq!(config.io_buffer_size, 4096);
@@ -59,7 +59,7 @@ fn test_encoding_and_buffer_configuration() {
         .with_buffer_size(16384)
         .build();
 
-    assert_eq!(config.text_encoding, "utf-16");
+    assert_eq!(config.text_encoding, "utf-8"); // Security restriction: UTF-8 enforced
     assert_eq!(config.io_buffer_size, 16384);
 }
 

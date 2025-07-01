@@ -30,13 +30,15 @@ pub fn create_test_isolate(box_id: &str) -> types::Result<isolate::Isolate> {
 mod basic;
 mod concurrent;
 mod file_locking;
-mod filesystem_security_tests;
+mod filesystem;
 mod filesize;
 mod invalid;
 mod io;
 mod language;
 mod memory;
+mod namespace;
 mod process;
+mod resource_limits;
 mod seccomp;
 mod security;
 mod strict_mode;
