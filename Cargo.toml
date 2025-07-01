@@ -23,7 +23,7 @@ seccomp = ["libseccomp"]
 
 # Platform-specific dependencies
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.27", features = ["process", "signal", "fs", "user"] }
+nix = { version = "0.27", features = ["process", "signal", "fs", "user", "sched", "mount"] }
 libc = "0.2"
 libseccomp = { version = "0.3", optional = true }
 

@@ -10,3 +10,4 @@ pub mod seccomp_native;
 pub mod types;
 pub mod io_handler;
 pub mod filesystem;
+pub mod namespace;

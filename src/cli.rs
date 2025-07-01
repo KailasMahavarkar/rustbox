@@ -140,6 +140,22 @@ pub enum Commands {
         /// Text encoding for I/O operations
         #[arg(long, default_value = "utf-8")]
         text_encoding: String,
+
+        /// Disable PID namespace isolation
+        #[arg(long)]
+        no_pid_namespace: bool,
+
+        /// Disable mount namespace isolation
+        #[arg(long)]
+        no_mount_namespace: bool,
+
+        /// Disable network namespace isolation
+        #[arg(long)]
+        no_network_namespace: bool,
+
+        /// Enable user namespace isolation (experimental)
+        #[arg(long)]
+        enable_user_namespace: bool,
     },
 
     /// Execute a source file directly
@@ -227,9 +243,23 @@ pub enum Commands {
         /// Text encoding for I/O operations
         #[arg(long, default_value = "utf-8")]
         text_encoding: String,
-    },
 
-    /// List all isolate instances
+        /// Disable PID namespace isolation
+        #[arg(long)]
+        no_pid_namespace: bool,
+
+        /// Disable mount namespace isolation
+        #[arg(long)]
+        no_mount_namespace: bool,
+
+        /// Disable network namespace isolation
+        #[arg(long)]
+        no_network_namespace: bool,
+
+        /// Enable user namespace isolation (experimental)
+        #[arg(long)]
+        enable_user_namespace: bool,
+    },
     List,
 
     /// Clean up isolate instance(s)
@@ -405,7 +435,10 @@ pub fn run() -> anyhow::Result<()> {
             enable_tty,
             use_pipes,
             io_buffer_size,
-            text_encoding,
+            text_encoding,            no_pid_namespace,
+            no_mount_namespace,
+            no_network_namespace,
+            enable_user_namespace,
         } => {
             let mut isolate = match Isolate::load(&box_id)? {
                 Some(mut isolate) => {
@@ -429,11 +462,23 @@ pub fn run() -> anyhow::Result<()> {
                     // Update I/O redirection
                     config.stdout_file = stdout_file;
                     config.stderr_file = stderr_file;
+
+                    // Update namespace configuration
+                    config.enable_pid_namespace = !no_pid_namespace;
+                    config.enable_mount_namespace = !no_mount_namespace;
+                    config.enable_network_namespace = !no_network_namespace;
+                    config.enable_user_namespace = enable_user_namespace;
                     config.stdin_file = stdin_file;
                     config.enable_tty = enable_tty;
                     config.use_pipes = use_pipes;
                     config.io_buffer_size = io_buffer_size;
                     config.text_encoding = text_encoding;
+
+                    // Update namespace configuration
+                    config.enable_pid_namespace = !no_pid_namespace;
+                    config.enable_mount_namespace = !no_mount_namespace;
+                    config.enable_network_namespace = !no_network_namespace;
+                    config.enable_user_namespace = enable_user_namespace;
 
                     isolate = Isolate::new(config)?;
                     isolate
@@ -547,6 +592,10 @@ pub fn run() -> anyhow::Result<()> {
             use_pipes,
             io_buffer_size,
             text_encoding,
+            no_pid_namespace,
+            no_mount_namespace,
+            no_network_namespace,
+            enable_user_namespace,
         } => {
             let mut isolate = match Isolate::load(&box_id)? {
                 Some(mut isolate) => {

@@ -1,10 +1,9 @@
 /// Process execution and monitoring
 use crate::cgroup::CgroupController;
 use crate::filesystem::FilesystemSecurity;
-use crate::seccomp::SeccompFilter;
+use crate::namespace::NamespaceIsolation;
 use crate::seccomp_native::NativeSeccompFilter;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig, IsolateError, Result};
-use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -19,6 +18,7 @@ pub struct ProcessExecutor {
     config: IsolateConfig,
     cgroup: Option<CgroupController>,
     filesystem: FilesystemSecurity,
+    namespace: NamespaceIsolation,
 }
 
 impl ProcessExecutor {
@@ -66,7 +66,17 @@ impl ProcessExecutor {
             config.strict_mode,
         );
 
-        Ok(Self { config, cgroup, filesystem })
+        // Initialize namespace isolation
+        let namespace = NamespaceIsolation::new(
+            config.workdir.clone(),
+            config.strict_mode,
+            config.enable_pid_namespace,
+            config.enable_mount_namespace,
+            config.enable_network_namespace,
+            config.enable_user_namespace,
+        );
+
+        Ok(Self { config, cgroup, filesystem, namespace })
     }
 
     /// Setup resource limits using cgroups
@@ -136,10 +146,33 @@ impl ProcessExecutor {
             let enable_seccomp = self.config.enable_seccomp;
             let seccomp_profile = self.config.seccomp_profile.clone();
             let chroot_dir = self.config.chroot_dir.clone();
+            let namespace_config = (
+                self.config.enable_pid_namespace,
+                self.config.enable_mount_namespace,
+                self.config.enable_network_namespace,
+                self.config.enable_user_namespace,
+            );
+            let workdir = self.config.workdir.clone();
+            let strict_mode = self.config.strict_mode;
             
             unsafe {
                 cmd.pre_exec(move || {
-                    // Apply chroot first if configured
+                    // Apply namespace isolation first
+                    let namespace = NamespaceIsolation::new(
+                        workdir.clone(),
+                        strict_mode,
+                        namespace_config.0,
+                        namespace_config.1,
+                        namespace_config.2,
+                        namespace_config.3,
+                    );
+                    if namespace.is_isolation_enabled() {
+                        namespace.apply_isolation().map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
+                        })?;
+                    }
+                    
+                    // Apply chroot after namespace setup
                     if let Some(ref chroot_path) = chroot_dir {
                         let fs_security = FilesystemSecurity::new(Some(chroot_path.clone()), PathBuf::from("/"), false);
                         fs_security.apply_chroot().map_err(|e| {
@@ -147,12 +180,12 @@ impl ProcessExecutor {
                         })?;
                     }
                     
-                    // Set UID/GID after chroot
+                    // Set UID/GID after namespace and chroot
                     nix::unistd::setuid(nix::unistd::Uid::from_raw(uid)).map_err(|e| {
                         std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
                     })?;
                     
-                    // Apply seccomp filter after privilege drop
+                    // Apply seccomp filter last
                     if enable_seccomp {
                         Self::apply_seccomp_filter_in_child(seccomp_profile.as_deref())?;
                     }
@@ -160,15 +193,38 @@ impl ProcessExecutor {
                     Ok(())
                 });
             }
-        } else if self.config.enable_seccomp || self.config.chroot_dir.is_some() {
-            // Apply seccomp and/or chroot even without UID change
+        } else if self.config.enable_seccomp || self.config.chroot_dir.is_some() || self.namespace.is_isolation_enabled() {
+            // Apply seccomp, chroot, and/or namespace isolation even without UID change
             let seccomp_profile = self.config.seccomp_profile.clone();
             let enable_seccomp = self.config.enable_seccomp;
             let chroot_dir = self.config.chroot_dir.clone();
+            let namespace_config = (
+                self.config.enable_pid_namespace,
+                self.config.enable_mount_namespace,
+                self.config.enable_network_namespace,
+                self.config.enable_user_namespace,
+            );
+            let workdir = self.config.workdir.clone();
+            let strict_mode = self.config.strict_mode;
             
             unsafe {
                 cmd.pre_exec(move || {
-                    // Apply chroot first if configured
+                    // Apply namespace isolation first
+                    let namespace = NamespaceIsolation::new(
+                        workdir.clone(),
+                        strict_mode,
+                        namespace_config.0,
+                        namespace_config.1,
+                        namespace_config.2,
+                        namespace_config.3,
+                    );
+                    if namespace.is_isolation_enabled() {
+                        namespace.apply_isolation().map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
+                        })?;
+                    }
+                    
+                    // Apply chroot after namespace setup
                     if let Some(ref chroot_path) = chroot_dir {
                         let fs_security = FilesystemSecurity::new(Some(chroot_path.clone()), PathBuf::from("/"), false);
                         fs_security.apply_chroot().map_err(|e| {
@@ -176,7 +232,7 @@ impl ProcessExecutor {
                         })?;
                     }
                     
-                    // Apply seccomp filter
+                    // Apply seccomp filter last
                     if enable_seccomp {
                         Self::apply_seccomp_filter_in_child(seccomp_profile.as_deref())?;
                     }

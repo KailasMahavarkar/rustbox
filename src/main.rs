@@ -8,6 +8,7 @@ mod executor;
 mod filesystem;
 mod io_handler;
 mod isolate;
+mod namespace;
 mod seccomp;
 mod seccomp_native;
 mod types;

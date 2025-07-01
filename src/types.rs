@@ -64,7 +64,11 @@ pub struct IsolateConfig {
     /// Buffer size for I/O operations (bytes)
     pub io_buffer_size: usize,
     /// Text encoding for I/O operations
-    pub text_encoding: String,
+    pub text_encoding: String,    /// Namespace isolation configuration
+    pub enable_pid_namespace: bool,
+    pub enable_mount_namespace: bool,
+    pub enable_network_namespace: bool,
+    pub enable_user_namespace: bool,
 }
 
 impl Default for IsolateConfig {
@@ -96,6 +100,10 @@ impl Default for IsolateConfig {
             stdin_file: None,
             io_buffer_size: 8192, // 8KB default buffer
             text_encoding: "utf-8".to_string(),
+            enable_pid_namespace: true,
+            enable_mount_namespace: true,
+            enable_network_namespace: true,
+            enable_user_namespace: false, // User namespace can be complex, disabled by default
         }
     }
 }
@@ -186,6 +194,9 @@ pub enum IsolateError {
 
     #[error("Lock file corrupted or incompatible")]
     LockCorrupted,
+
+    #[error("Namespace isolation error: {0}")]
+    Namespace(String),
 }
 
 /// Result type alias for mini-isolate operations
