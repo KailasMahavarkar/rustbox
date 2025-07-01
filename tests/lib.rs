@@ -1,5 +1,5 @@
+use mini_isolate::{isolate, types};
 use tempfile::TempDir;
-use mini_isolate::{types, isolate};
 
 /// Helper function to create test directory
 fn setup_test_env() -> TempDir {
@@ -19,23 +19,24 @@ pub fn create_test_isolate(box_id: &str) -> types::Result<isolate::Isolate> {
     // Create working directory
     let temp_dir = setup_test_env();
     config.workdir = temp_dir.path().to_path_buf();
-    
+
     // Leak the temp_dir so it doesn't get dropped
     std::mem::forget(temp_dir);
-    
+
     isolate::Isolate::new(config)
 }
 
 // Import all test modules
 mod basic;
-mod memory;
-mod timeout;
-mod process;
+mod concurrent;
+mod file_locking;
 mod filesize;
 mod invalid;
-mod concurrent;
 mod io;
 mod language;
-mod security;
+mod memory;
+mod process;
 mod resource_limits;
+mod security;
 mod strict_mode;
+mod timeout;

@@ -37,6 +37,9 @@ pub struct IsolateConfig {
     pub allowed_syscalls: Option<Vec<String>>,
     /// Strict mode: fail hard if cgroups unavailable or permission denied
     pub strict_mode: bool,
+    /// Inherit file descriptors from parent process
+    #[serde(default)]
+    pub inherit_fds: bool,
 }
 
 impl Default for IsolateConfig {
@@ -57,6 +60,7 @@ impl Default for IsolateConfig {
             environment: Vec::new(),
             allowed_syscalls: None,
             strict_mode: false,
+            inherit_fds: false,
         }
     }
 }
@@ -129,17 +133,24 @@ pub struct ResourceUsage {
 pub enum IsolateError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Cgroup error: {0}")]
     Cgroup(String),
-    
+
     #[error("Configuration error: {0}")]
     Config(String),
-    
+
     #[error("Process error: {0}")]
     Process(String),
-    
 
+    #[error("Lock error: {0}")]
+    Lock(String),
+
+    #[error("Lock already held by process")]
+    LockBusy,
+
+    #[error("Lock file corrupted or incompatible")]
+    LockCorrupted,
 }
 
 /// Result type alias for mini-isolate operations

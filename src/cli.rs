@@ -1,8 +1,8 @@
 /// Command Line Interface for the mini-isolate system
 use crate::isolate::Isolate;
-use crate::types::{IsolateConfig, ExecutionStatus};
+use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -20,131 +20,171 @@ pub enum Commands {
         /// Instance identifier (box-id)
         #[arg(short, long, default_value = "0")]
         box_id: String,
-        
+
         /// Working directory for the isolate
         #[arg(short, long)]
         dir: Option<PathBuf>,
-        
+
         /// Memory limit in MB
         #[arg(short, long, default_value = "128")]
         mem: u64,
-        
+
         /// Time limit in seconds
         #[arg(short, long, default_value = "10")]
         time: u64,
-        
+
         /// Wall clock time limit in seconds (defaults to 2x time limit)
         #[arg(short, long)]
         wall_time: Option<u64>,
-        
+
         /// Process limit
         #[arg(short, long, default_value = "1")]
         processes: u32,
-        
+
         /// File size limit in MB
         #[arg(short, long, default_value = "64")]
         fsize: u64,
-        
+
         /// Strict mode: require root privileges and fail if cgroups unavailable
         #[arg(long)]
         strict: bool,
     },
-    
+
     /// Run a program in the isolate
     Run {
-        /// Instance identifier (box-id) 
+        /// Instance identifier (box-id)
         #[arg(short, long, default_value = "0")]
         box_id: String,
-        
+
         /// Program to run (path to executable or script)
         program: String,
-        
+
         /// Arguments for the program
         #[arg(last = true)]
         args: Vec<String>,
-        
+
         /// Input file (stdin will be redirected from this file)
         #[arg(short, long)]
         input: Option<PathBuf>,
-        
+
         /// Output results to JSON file
         #[arg(short, long)]
         output: Option<PathBuf>,
-        
+
+        /// Output meta information to file (isolate-compatible format)
+        #[arg(short = 'M', long = "meta")]
+        meta: Option<PathBuf>,
+
         /// Verbose output
         #[arg(short, long)]
         verbose: bool,
-        
+
+        /// Silent mode - suppress all output except results
+        #[arg(long)]
+        silent: bool,
+
         /// Override CPU time limit in seconds
         #[arg(long)]
         max_cpu: Option<u64>,
-        
+
         /// Override memory limit in MB
         #[arg(long)]
         max_memory: Option<u64>,
-        
+
         /// Override execution time limit in seconds
         #[arg(long)]
         max_time: Option<u64>,
-        
+
         /// Strict mode: require root privileges and fail if cgroups unavailable
         #[arg(long)]
         strict: bool,
+
+        /// Environment variable (can be used multiple times): -E VAR=value
+        #[arg(short = 'E', long = "env", value_name = "VAR=VALUE")]
+        env_vars: Vec<String>,
+
+        /// Inherit all environment variables from parent
+        #[arg(long)]
+        full_env: bool,
+
+        /// Inherit file descriptors from parent process
+        #[arg(long)]
+        inherit_fds: bool,
     },
-    
+
     /// Execute a source file directly
     Execute {
         /// Instance identifier (box-id)
         #[arg(short, long, default_value = "0")]
         box_id: String,
-        
+
         /// Source file to execute
         #[arg(short, long)]
         source: PathBuf,
-        
+
         /// Input file (stdin)
         #[arg(short, long)]
         input: Option<PathBuf>,
-        
+
         /// Output results to JSON file
         #[arg(short, long)]
         output: Option<PathBuf>,
-        
+
+        /// Output meta information to file (isolate-compatible format)
+        #[arg(short = 'M', long = "meta")]
+        meta: Option<PathBuf>,
+
         /// Verbose output
         #[arg(short, long)]
         verbose: bool,
-        
+
+        /// Silent mode - suppress all output except results
+        #[arg(long)]
+        silent: bool,
+
         /// Override CPU time limit in seconds
         #[arg(long)]
         max_cpu: Option<u64>,
-        
+
         /// Override memory limit in MB
         #[arg(long)]
         max_memory: Option<u64>,
-        
+
         /// Override execution time limit in seconds
         #[arg(long)]
         max_time: Option<u64>,
-        
+
         /// Strict mode: require root privileges and fail if cgroups unavailable
         #[arg(long)]
         strict: bool,
+
+        /// Environment variable (can be used multiple times): -E VAR=value
+        #[arg(short = 'E', long = "env", value_name = "VAR=VALUE")]
+        env_vars: Vec<String>,
+
+        /// Inherit all environment variables from parent
+        #[arg(long)]
+        full_env: bool,
+
+        /// Inherit file descriptors from parent process
+        #[arg(long)]
+        inherit_fds: bool,
     },
-    
+
     /// List all isolate instances
     List,
-    
+
     /// Clean up isolate instance(s)
     Cleanup {
         /// Instance identifier (box-id) to clean up
         #[arg(short, long)]
         box_id: Option<String>,
-        
+
         /// Clean up all instances
         #[arg(short, long)]
         all: bool,
     },
-    
+
     /// Show system information
     Info {
         /// Show detailed cgroup information
@@ -153,17 +193,102 @@ pub enum Commands {
     },
 }
 
+fn parse_environment_vars(env_vars: &[String], full_env: bool) -> Vec<(String, String)> {
+    let mut environment = Vec::new();
+
+    // If full_env is specified, inherit all current environment variables
+    if full_env {
+        for (key, value) in std::env::vars() {
+            environment.push((key, value));
+        }
+    }
+
+    // Parse custom environment variables
+    for env_var in env_vars {
+        if let Some(pos) = env_var.find('=') {
+            let key = env_var[..pos].to_string();
+            let value = env_var[pos + 1..].to_string();
+
+            // Remove existing entry if present (custom vars override inherited ones)
+            environment.retain(|(k, _)| k != &key);
+            environment.push((key, value));
+        } else {
+            eprintln!("Warning: Invalid environment variable format: {}", env_var);
+        }
+    }
+
+    environment
+}
+
+fn write_meta_file(meta_path: &Path, result: &ExecutionResult) -> anyhow::Result<()> {
+    let mut content = String::new();
+
+    // Write timing information
+    content.push_str(&format!("time:{:.3}\n", result.cpu_time));
+    content.push_str(&format!("time-wall:{:.3}\n", result.wall_time));
+
+    // Write memory usage
+    content.push_str(&format!("max-rss:{}\n", result.memory_peak));
+
+    // Write exit information
+    match result.status {
+        ExecutionStatus::Success => {
+            content.push_str(&format!("exitcode:{}\n", result.exit_code.unwrap_or(0)));
+        }
+        ExecutionStatus::TimeLimit => {
+            content.push_str("status:TO\n");
+            content.push_str("message:Time limit exceeded\n");
+        }
+        ExecutionStatus::MemoryLimit => {
+            content.push_str("status:RE\n");
+            content.push_str("message:Memory limit exceeded\n");
+        }
+        ExecutionStatus::RuntimeError => {
+            content.push_str(&format!("exitcode:{}\n", result.exit_code.unwrap_or(1)));
+        }
+        ExecutionStatus::Signaled => {
+            if let Some(signal) = result.signal {
+                content.push_str(&format!("exitsig:{}\n", signal));
+            }
+            content.push_str("killed:1\n");
+        }
+        ExecutionStatus::SecurityViolation => {
+            content.push_str("status:SG\n");
+            content.push_str("message:Security violation\n");
+        }
+        ExecutionStatus::ProcessLimit => {
+            content.push_str("status:RE\n");
+            content.push_str("message:Process limit exceeded\n");
+        }
+        ExecutionStatus::FileSizeLimit => {
+            content.push_str("status:RE\n");
+            content.push_str("message:File size limit exceeded\n");
+        }
+        ExecutionStatus::InternalError => {
+            content.push_str("status:XX\n");
+            if let Some(ref error_msg) = result.error_message {
+                content.push_str(&format!("message:{}\n", error_msg));
+            } else {
+                content.push_str("message:Internal error\n");
+            }
+        }
+    }
+
+    std::fs::write(meta_path, content)?;
+    Ok(())
+}
+
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    
+
     match cli.command {
-        Commands::Init { 
-            box_id, 
-            dir, 
-            mem, 
-            time, 
-            wall_time, 
-            processes, 
+        Commands::Init {
+            box_id,
+            dir,
+            mem,
+            time,
+            wall_time,
+            processes,
             fsize,
             strict,
         } => {
@@ -172,7 +297,7 @@ pub fn run() -> anyhow::Result<()> {
                 strict_mode: strict,
                 ..Default::default()
             };
-            
+
             // Set working directory
             if let Some(workdir) = dir {
                 config.workdir = workdir;
@@ -182,7 +307,7 @@ pub fn run() -> anyhow::Result<()> {
                 default_dir.push(&box_id);
                 config.workdir = default_dir;
             }
-            
+
             // Set resource limits
             config.memory_limit = Some(mem * 1024 * 1024); // Convert MB to bytes
             config.time_limit = Some(Duration::from_secs(time));
@@ -190,34 +315,49 @@ pub fn run() -> anyhow::Result<()> {
             config.wall_time_limit = Some(Duration::from_secs(wall_time.unwrap_or(time * 2)));
             config.process_limit = Some(processes);
             config.file_size_limit = Some(fsize * 1024 * 1024); // Convert MB to bytes
-            
+
             let isolate = Isolate::new(config)?;
-            println!("Isolate instance '{}' initialized at: {}", 
-                     box_id, isolate.config().workdir.display());
-        },
-        
-        Commands::Run { 
-            box_id, 
-            program, 
-            args, 
-            input, 
-            output, 
+            println!(
+                "Isolate instance '{}' initialized at: {}",
+                box_id,
+                isolate.config().workdir.display()
+            );
+        }
+
+        Commands::Run {
+            box_id,
+            program,
+            args,
+            input,
+            output,
+            meta,
             verbose,
+            silent,
             max_cpu,
             max_memory,
             max_time,
             strict,
+            env_vars,
+            full_env,
+            inherit_fds,
         } => {
             let mut isolate = match Isolate::load(&box_id)? {
                 Some(mut isolate) => {
-                    // Update strict mode if specified
+                    // Update configuration if specified
+                    let mut config = isolate.config().clone();
                     if strict {
-                        let mut config = isolate.config().clone();
                         config.strict_mode = true;
-                        isolate = Isolate::new(config)?;
                     }
+
+                    // Update environment variables
+                    config.environment = parse_environment_vars(&env_vars, full_env);
+
+                    // Update inherit_fds
+                    config.inherit_fds = inherit_fds;
+
+                    isolate = Isolate::new(config)?;
                     isolate
-                },
+                }
                 None => {
                     eprintln!("Isolate instance '{}' not found. Run 'init' first.", box_id);
                     std::process::exit(1);
@@ -237,34 +377,55 @@ pub fn run() -> anyhow::Result<()> {
 
             // Execute command with optional overrides
             let result = if max_cpu.is_some() || max_memory.is_some() || max_time.is_some() {
-                isolate.execute_with_overrides(&command, stdin_data.as_deref(), max_cpu, max_memory, max_time)?
+                isolate.execute_with_overrides(
+                    &command,
+                    stdin_data.as_deref(),
+                    max_cpu,
+                    max_memory,
+                    max_time,
+                )?
             } else {
                 isolate.execute(&command, stdin_data.as_deref())?
             };
 
             // Handle output
-            if let Some(output_file) = output {
+            if let Some(ref output_file) = output {
                 let json_output = serde_json::to_string_pretty(&result)?;
                 std::fs::write(output_file, json_output)?;
-                println!("Results written to output file");
-            } else {
+                if !silent {
+                    println!("Results written to output file");
+                }
+            }
+
+            // Write meta file if specified
+            if let Some(meta_file) = meta {
+                write_meta_file(&meta_file, &result)?;
+                if !silent {
+                    println!("Meta information written to meta file");
+                }
+            }
+
+            if !silent && output.is_none() {
                 // Print summary
                 println!("Status: {:?}", result.status);
                 println!("Exit code: {:?}", result.exit_code);
-                println!("Time: {:.3}s (wall), {:.3}s (CPU)", result.wall_time, result.cpu_time);
+                println!(
+                    "Time: {:.3}s (wall), {:.3}s (CPU)",
+                    result.wall_time, result.cpu_time
+                );
                 println!("Memory peak: {} KB", result.memory_peak / 1024);
-                
+
                 if verbose || result.status != ExecutionStatus::Success {
                     if !result.stdout.is_empty() {
                         println!("\n--- STDOUT ---");
                         println!("{}", result.stdout);
                     }
-                    
+
                     if !result.stderr.is_empty() {
                         println!("\n--- STDERR ---");
                         println!("{}", result.stderr);
                     }
-                    
+
                     if let Some(error_msg) = &result.error_message {
                         println!("\n--- ERROR ---");
                         println!("{}", error_msg);
@@ -282,29 +443,41 @@ pub fn run() -> anyhow::Result<()> {
                 ExecutionStatus::InternalError => std::process::exit(5),
                 _ => std::process::exit(1),
             }
-        },
+        }
 
-        Commands::Execute { 
-            box_id, 
-            source, 
-            input, 
-            output, 
+        Commands::Execute {
+            box_id,
+            source,
+            input,
+            output,
+            meta,
             verbose,
+            silent,
             max_cpu,
             max_memory,
             max_time,
             strict,
+            env_vars,
+            full_env,
+            inherit_fds,
         } => {
             let mut isolate = match Isolate::load(&box_id)? {
                 Some(mut isolate) => {
-                    // Update strict mode if specified
+                    // Update configuration if specified
+                    let mut config = isolate.config().clone();
                     if strict {
-                        let mut config = isolate.config().clone();
                         config.strict_mode = true;
-                        isolate = Isolate::new(config)?;
                     }
+
+                    // Update environment variables
+                    config.environment = parse_environment_vars(&env_vars, full_env);
+
+                    // Update inherit_fds
+                    config.inherit_fds = inherit_fds;
+
+                    isolate = Isolate::new(config)?;
                     isolate
-                },
+                }
                 None => {
                     eprintln!("Isolate instance '{}' not found. Run 'init' first.", box_id);
                     std::process::exit(1);
@@ -320,33 +493,54 @@ pub fn run() -> anyhow::Result<()> {
 
             // Execute source file with optional overrides
             let result = if max_cpu.is_some() || max_memory.is_some() || max_time.is_some() {
-                isolate.execute_file_with_overrides(&source, stdin_data.as_deref(), max_cpu, max_memory, max_time)?
+                isolate.execute_file_with_overrides(
+                    &source,
+                    stdin_data.as_deref(),
+                    max_cpu,
+                    max_memory,
+                    max_time,
+                )?
             } else {
                 isolate.execute_file(&source, stdin_data.as_deref())?
             };
 
             // Handle output (same as Run command)
-            if let Some(output_file) = output {
+            if let Some(ref output_file) = output {
                 let json_output = serde_json::to_string_pretty(&result)?;
                 std::fs::write(output_file, json_output)?;
-                println!("Results written to output file");
-            } else {
+                if !silent {
+                    println!("Results written to output file");
+                }
+            }
+
+            // Write meta file if specified
+            if let Some(meta_file) = meta {
+                write_meta_file(&meta_file, &result)?;
+                if !silent {
+                    println!("Meta information written to meta file");
+                }
+            }
+
+            if !silent && output.is_none() {
                 println!("Status: {:?}", result.status);
                 println!("Exit code: {:?}", result.exit_code);
-                println!("Time: {:.3}s (wall), {:.3}s (CPU)", result.wall_time, result.cpu_time);
+                println!(
+                    "Time: {:.3}s (wall), {:.3}s (CPU)",
+                    result.wall_time, result.cpu_time
+                );
                 println!("Memory peak: {} KB", result.memory_peak / 1024);
-                
+
                 if verbose || result.status != ExecutionStatus::Success {
                     if !result.stdout.is_empty() {
                         println!("\n--- STDOUT ---");
                         println!("{}", result.stdout);
                     }
-                    
+
                     if !result.stderr.is_empty() {
                         println!("\n--- STDERR ---");
                         println!("{}", result.stderr);
                     }
-                    
+
                     if let Some(error_msg) = &result.error_message {
                         println!("\n--- ERROR ---");
                         println!("{}", error_msg);
@@ -364,8 +558,8 @@ pub fn run() -> anyhow::Result<()> {
                 ExecutionStatus::InternalError => std::process::exit(5),
                 _ => std::process::exit(1),
             }
-        },
-        
+        }
+
         Commands::List => {
             let instances = Isolate::list_all()?;
             if instances.is_empty() {
@@ -378,8 +572,8 @@ pub fn run() -> anyhow::Result<()> {
                     }
                 }
             }
-        },
-        
+        }
+
         Commands::Cleanup { box_id, all } => {
             if all {
                 let instances = Isolate::list_all()?;
@@ -402,19 +596,19 @@ pub fn run() -> anyhow::Result<()> {
                 eprintln!("Specify --box-id <ID> or --all");
                 std::process::exit(1);
             }
-        },
-        
+        }
+
         Commands::Info { cgroups } => {
             println!("Mini-Isolate System Information");
             println!("==============================");
-            
+
             // Check cgroup support
             if crate::cgroup::cgroups_available() {
                 println!("Cgroups: Available");
                 if let Ok(mount_point) = crate::cgroup::get_cgroup_mount() {
                     println!("Cgroup mount: {}", mount_point);
                 }
-                
+
                 if cgroups {
                     // Show detailed cgroup info
                     println!("\nCgroup Controllers:");
@@ -426,17 +620,17 @@ pub fn run() -> anyhow::Result<()> {
             } else {
                 println!("Cgroups: Not available");
             }
-            
+
             // Show system limits
             println!("\nSystem Information:");
             println!("Platform: {}", std::env::consts::OS);
             println!("Architecture: {}", std::env::consts::ARCH);
-            
+
             // Show active instances
             let instances = Isolate::list_all()?;
             println!("Active instances: {}", instances.len());
-        },
+        }
     }
-    
+
     Ok(())
 }

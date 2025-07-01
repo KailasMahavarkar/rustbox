@@ -31,21 +31,24 @@ impl ProcessExecutor {
                     ));
                 }
             }
-            
+
             // Ensure cgroups are available in strict mode
             if !crate::cgroup::cgroups_available() {
                 return Err(IsolateError::Config(
-                    "Strict mode requires cgroups to be available on this system.".to_string()
+                    "Strict mode requires cgroups to be available on this system.".to_string(),
                 ));
             }
         }
-        
+
         let cgroup = if crate::cgroup::cgroups_available() {
-            Some(CgroupController::new(&config.instance_id, config.strict_mode)?)
+            Some(CgroupController::new(
+                &config.instance_id,
+                config.strict_mode,
+            )?)
         } else {
             if config.strict_mode {
                 return Err(IsolateError::Config(
-                    "Strict mode requires cgroups to be available on this system.".to_string()
+                    "Strict mode requires cgroups to be available on this system.".to_string(),
                 ));
             }
             None
@@ -74,7 +77,11 @@ impl ProcessExecutor {
     }
 
     /// Execute a command with isolation
-    pub fn execute(&mut self, command: &[String], stdin_data: Option<&str>) -> Result<ExecutionResult> {
+    pub fn execute(
+        &mut self,
+        command: &[String],
+        stdin_data: Option<&str>,
+    ) -> Result<ExecutionResult> {
         if command.is_empty() {
             return Err(IsolateError::Config("Empty command provided".to_string()));
         }
@@ -103,28 +110,30 @@ impl ProcessExecutor {
         for (key, value) in &self.config.environment {
             cmd.env(key, value);
         }
-        
+
         // Ensure PATH is set - inherit from parent process if not explicitly set
         if !self.config.environment.iter().any(|(k, _)| k == "PATH") {
             if let Ok(path) = std::env::var("PATH") {
                 cmd.env("PATH", path);
             }
         }
-        
+
         // Set user/group if specified (Unix only)
         #[cfg(unix)]
         if let Some(uid) = self.config.uid {
             unsafe {
                 cmd.pre_exec(move || {
-                    nix::unistd::setuid(nix::unistd::Uid::from_raw(uid))
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+                    nix::unistd::setuid(nix::unistd::Uid::from_raw(uid)).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
+                    })?;
                     Ok(())
                 });
             }
         }
 
         // Start the process
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| IsolateError::Process(format!("Failed to start process: {}", e)))?;
 
         let pid = child.id();
@@ -142,7 +151,10 @@ impl ProcessExecutor {
         }
 
         // Wait for process with timeout
-        let wall_time_limit = self.config.wall_time_limit.unwrap_or(Duration::from_secs(30));
+        let wall_time_limit = self
+            .config
+            .wall_time_limit
+            .unwrap_or(Duration::from_secs(30));
         let execution_result = self.wait_with_timeout(child, wall_time_limit, start_time)?;
 
         Ok(execution_result)
@@ -186,7 +198,7 @@ impl ProcessExecutor {
                     Err(_) => return Err(IsolateError::Process("Thread join failed".to_string())),
                 }
             }
-            
+
             // Check if we've exceeded the timeout
             if start.elapsed() >= timeout {
                 // Kill the process and wait a bit for cleanup
@@ -194,7 +206,7 @@ impl ProcessExecutor {
                 unsafe {
                     libc::kill(child_id as i32, libc::SIGKILL);
                 }
-                
+
                 #[cfg(not(unix))]
                 {
                     // On Windows, forcefully terminate the process
@@ -202,41 +214,45 @@ impl ProcessExecutor {
                         .args(&["/F", "/PID", &child_id.to_string()])
                         .output();
                 }
-                
+
                 // Give the process a moment to die, then collect results
                 thread::sleep(Duration::from_millis(100));
-                
+
                 match monitor_handle.join() {
                     Ok(result) => break Some(result),
                     Err(_) => break None,
                 }
             }
-            
+
             // Sleep briefly to avoid busy waiting
             thread::sleep(Duration::from_millis(10));
         };
 
         let (wait_result, stdout, stderr) = match result {
             Some((wait_result, stdout, stderr)) => (wait_result, stdout, stderr),
-            None => return Err(IsolateError::Process("Process monitoring failed".to_string())),
+            None => {
+                return Err(IsolateError::Process(
+                    "Process monitoring failed".to_string(),
+                ))
+            }
         };
 
         // Check wall time after process completion
         let wall_time = start_time.elapsed().as_secs_f64();
-        
+
         match wait_result {
             Ok(exit_status) => {
                 let exit_code = exit_status.code();
-                
+
                 // Get signal information (Unix only)
                 #[cfg(unix)]
                 let signal = exit_status.signal();
                 #[cfg(not(unix))]
                 let signal = None;
-                
+
                 // Determine if process was killed due to timeout
                 let timed_out = wall_time >= timeout.as_secs_f64() || signal == Some(9);
-                
+
                 let status = if timed_out {
                     ExecutionStatus::TimeLimit
                 } else if exit_status.success() {
@@ -259,10 +275,10 @@ impl ProcessExecutor {
                     memory_peak,
                     signal,
                     success: exit_status.success() && !timed_out,
-                    error_message: if timed_out { 
-                        Some("Wall time limit exceeded".to_string()) 
-                    } else { 
-                        None 
+                    error_message: if timed_out {
+                        Some("Wall time limit exceeded".to_string())
+                    } else {
+                        None
                     },
                 })
             }
@@ -295,8 +311,7 @@ impl ProcessExecutor {
     /// Setup working directory
     fn setup_workdir(&self) -> Result<()> {
         if !self.config.workdir.exists() {
-            fs::create_dir_all(&self.config.workdir)
-                .map_err(IsolateError::Io)?;
+            fs::create_dir_all(&self.config.workdir).map_err(IsolateError::Io)?;
         }
 
         // Set permissions if needed
