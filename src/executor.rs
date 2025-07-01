@@ -2,6 +2,7 @@
 use crate::cgroup::CgroupController;
 use crate::filesystem::FilesystemSecurity;
 use crate::namespace::NamespaceIsolation;
+use crate::resource_limits::ResourceLimitController;
 use crate::seccomp_native::NativeSeccompFilter;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig, IsolateError, Result};
 use std::io::{Read, Write};
@@ -19,6 +20,7 @@ pub struct ProcessExecutor {
     cgroup: Option<CgroupController>,
     filesystem: FilesystemSecurity,
     namespace: NamespaceIsolation,
+    resource_limits: ResourceLimitController,
 }
 
 impl ProcessExecutor {
@@ -76,11 +78,15 @@ impl ProcessExecutor {
             config.enable_user_namespace,
         );
 
-        Ok(Self { config, cgroup, filesystem, namespace })
+        // Initialize resource limits controller
+        let resource_limits = ResourceLimitController::new(config.strict_mode);
+
+        Ok(Self { config, cgroup, filesystem, namespace, resource_limits })
     }
 
-    /// Setup resource limits using cgroups
+    /// Setup resource limits using cgroups and rlimit
     fn setup_resource_limits(&self) -> Result<()> {
+        // Setup cgroup-based limits
         if let Some(ref cgroup) = self.cgroup {
             // Set memory limit
             if let Some(memory_limit) = self.config.memory_limit {
@@ -95,6 +101,33 @@ impl ProcessExecutor {
             // Set CPU shares (relative weight)
             cgroup.set_cpu_limit(1024)?; // Standard CPU shares
         }
+
+        // Setup rlimit-based limits
+        if let Some(stack_limit) = self.config.stack_limit {
+            self.resource_limits.set_stack_limit(stack_limit)?;
+        }
+
+        if let Some(core_limit) = self.config.core_limit {
+            self.resource_limits.set_core_limit(core_limit)?;
+        }
+
+        if let Some(file_size_limit) = self.config.file_size_limit {
+            self.resource_limits.set_file_size_limit(file_size_limit)?;
+        }
+
+        if let Some(cpu_time_limit) = self.config.cpu_time_limit {
+            self.resource_limits.set_cpu_time_limit(cpu_time_limit.as_secs())?;
+        }
+
+        if let Some(process_limit) = self.config.process_limit {
+            self.resource_limits.set_process_limit(process_limit as u64)?;
+        }
+
+        // Check disk quota if specified
+        if let Some(disk_quota) = self.config.disk_quota {
+            self.resource_limits.set_disk_quota(&self.config.workdir, disk_quota)?;
+        }
+
         Ok(())
     }
 

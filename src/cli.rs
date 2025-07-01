@@ -45,6 +45,18 @@ pub enum Commands {
         #[arg(short, long, default_value = "64")]
         fsize: u64,
 
+        /// Stack size limit in MB
+        #[arg(long, default_value = "8")]
+        stack: u64,
+
+        /// Core dump size limit in MB (0 to disable)
+        #[arg(long, default_value = "0")]
+        core: u64,
+
+        /// Disk quota limit in MB (0 to disable)
+        #[arg(long)]
+        quota: Option<u64>,
+
         /// Strict mode: require root privileges and fail if cgroups unavailable
         #[arg(long)]
         strict: bool,
@@ -352,6 +364,18 @@ fn write_meta_file(meta_path: &Path, result: &ExecutionResult) -> anyhow::Result
             content.push_str("status:RE\n");
             content.push_str("message:File size limit exceeded\n");
         }
+        ExecutionStatus::StackLimit => {
+            content.push_str("status:RE\n");
+            content.push_str("message:Stack limit exceeded\n");
+        }
+        ExecutionStatus::CoreLimit => {
+            content.push_str("status:RE\n");
+            content.push_str("message:Core dump limit exceeded\n");
+        }
+        ExecutionStatus::DiskQuotaExceeded => {
+            content.push_str("status:RE\n");
+            content.push_str("message:Disk quota exceeded\n");
+        }
         ExecutionStatus::InternalError => {
             content.push_str("status:XX\n");
             if let Some(ref error_msg) = result.error_message {
@@ -378,6 +402,9 @@ pub fn run() -> anyhow::Result<()> {
             wall_time,
             processes,
             fsize,
+            stack,
+            core,
+            quota,
             strict,
         } => {
             let mut config = IsolateConfig {
@@ -403,6 +430,9 @@ pub fn run() -> anyhow::Result<()> {
             config.wall_time_limit = Some(Duration::from_secs(wall_time.unwrap_or(time * 2)));
             config.process_limit = Some(processes);
             config.file_size_limit = Some(fsize * 1024 * 1024); // Convert MB to bytes
+            config.stack_limit = Some(stack * 1024 * 1024); // Convert MB to bytes
+            config.core_limit = Some(core * 1024 * 1024); // Convert MB to bytes
+            config.disk_quota = quota.map(|q| q * 1024 * 1024); // Convert MB to bytes
 
             let isolate = Isolate::new(config)?;
             println!(

@@ -9,6 +9,7 @@ mod filesystem;
 mod io_handler;
 mod isolate;
 mod namespace;
+mod resource_limits;
 mod seccomp;
 mod seccomp_native;
 mod types;

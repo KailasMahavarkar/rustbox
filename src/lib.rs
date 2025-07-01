@@ -4,10 +4,11 @@
 pub mod cgroup;
 pub mod cli;
 pub mod executor;
+pub mod filesystem;
+pub mod io_handler;
 pub mod isolate;
+pub mod namespace;
+pub mod resource_limits;
 pub mod seccomp;
 pub mod seccomp_native;
 pub mod types;
-pub mod io_handler;
-pub mod filesystem;
-pub mod namespace;

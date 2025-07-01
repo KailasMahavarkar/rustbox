@@ -34,6 +34,12 @@ pub struct IsolateConfig {
     pub process_limit: Option<u32>,
     /// Maximum file size
     pub file_size_limit: Option<u64>,
+    /// Stack size limit in bytes
+    pub stack_limit: Option<u64>,
+    /// Core dump size limit in bytes (0 to disable core dumps)
+    pub core_limit: Option<u64>,
+    /// Disk quota limit in bytes (filesystem-dependent)
+    pub disk_quota: Option<u64>,
     /// Enable networking
     pub enable_network: bool,
     /// Custom environment variables
@@ -85,6 +91,9 @@ impl Default for IsolateConfig {
             wall_time_limit: Some(Duration::from_secs(20)),
             process_limit: Some(1),
             file_size_limit: Some(64 * 1024 * 1024), // 64MB
+            stack_limit: Some(8 * 1024 * 1024), // 8MB default stack
+            core_limit: Some(0), // Disable core dumps by default
+            disk_quota: None, // No disk quota by default
             enable_network: false,
             environment: Vec::new(),
             allowed_syscalls: None,
@@ -154,6 +163,12 @@ pub enum ExecutionStatus {
     ProcessLimit,
     /// File size limit exceeded
     FileSizeLimit,
+    /// Stack limit exceeded
+    StackLimit,
+    /// Core dump limit exceeded
+    CoreLimit,
+    /// Disk quota exceeded
+    DiskQuotaExceeded,
 }
 
 /// Resource usage statistics
@@ -197,6 +212,9 @@ pub enum IsolateError {
 
     #[error("Namespace isolation error: {0}")]
     Namespace(String),
+
+    #[error("Resource limit error: {0}")]
+    ResourceLimit(String),
 }
 
 /// Result type alias for mini-isolate operations

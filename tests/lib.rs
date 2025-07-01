@@ -37,7 +37,6 @@ mod io;
 mod language;
 mod memory;
 mod process;
-mod resource_limits;
 mod seccomp;
 mod security;
 mod strict_mode;
