@@ -1,5 +1,7 @@
 /// Process execution and monitoring
 use crate::cgroup::CgroupController;
+use crate::seccomp::SeccompFilter;
+use crate::seccomp_native::NativeSeccompFilter;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig, IsolateError, Result};
 use std::fs;
 use std::io::{Read, Write};
@@ -121,11 +123,30 @@ impl ProcessExecutor {
         // Set user/group if specified (Unix only)
         #[cfg(unix)]
         if let Some(uid) = self.config.uid {
+            let enable_seccomp = self.config.enable_seccomp;
+            let seccomp_profile = self.config.seccomp_profile.clone();
+            
             unsafe {
                 cmd.pre_exec(move || {
+                    // Set UID/GID first
                     nix::unistd::setuid(nix::unistd::Uid::from_raw(uid)).map_err(|e| {
                         std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
                     })?;
+                    
+                    // Apply seccomp filter after privilege drop
+                    if enable_seccomp {
+                        Self::apply_seccomp_filter_in_child(seccomp_profile.as_deref())?;
+                    }
+                    
+                    Ok(())
+                });
+            }
+        } else if self.config.enable_seccomp {
+            // Apply seccomp even without UID change
+            let seccomp_profile = self.config.seccomp_profile.clone();
+            unsafe {
+                cmd.pre_exec(move || {
+                    Self::apply_seccomp_filter_in_child(seccomp_profile.as_deref())?;
                     Ok(())
                 });
             }
@@ -333,6 +354,53 @@ impl ProcessExecutor {
             cgroup.cleanup()?;
         }
         Ok(())
+    }
+
+    /// Apply seccomp filter in child process (called via pre_exec)
+    fn apply_seccomp_filter_in_child(_profile: Option<&str>) -> std::io::Result<()> {
+        // Try libseccomp first (if available and compiled with seccomp feature)
+        #[cfg(feature = "seccomp")]
+        {
+            if crate::seccomp::is_seccomp_supported() {
+                let filter = if let Some(profile) = _profile {
+                    SeccompFilter::new_for_language(profile)
+                } else {
+                    SeccompFilter::new_for_anonymous_code()
+                };
+
+                return filter.apply().map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        format!("Failed to apply libseccomp filter: {}", e),
+                    )
+                });
+            }
+        }
+        
+        // Fallback to native seccomp implementation
+        if NativeSeccompFilter::is_supported() {
+            let native_filter = NativeSeccompFilter::new_for_anonymous_code();
+            
+            // Apply no-new-privs first (prevents privilege escalation)
+            native_filter.apply_no_new_privs().map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("Failed to apply no-new-privs: {}", e),
+                )
+            })?;
+            
+            // Apply basic seccomp protection
+            native_filter.apply_basic_protection().map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("Failed to apply native seccomp: {}", e),
+                )
+            })
+        } else {
+            // No seccomp available - log warning but don't fail
+            eprintln!("Warning: No seccomp support available");
+            Ok(())
+        }
     }
 }
 

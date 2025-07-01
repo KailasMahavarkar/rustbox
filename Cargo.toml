@@ -15,11 +15,17 @@ chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
 thiserror = "1.0"
 env_logger = "0.10"
+log = "0.4"
+
+[features]
+default = []
+seccomp = ["libseccomp"]
 
 # Platform-specific dependencies
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27", features = ["process", "signal", "fs", "user"] }
 libc = "0.2"
+libseccomp = { version = "0.3", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["processthreadsapi", "handleapi", "synchapi"] }

@@ -4,6 +4,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 use thiserror::Error;
 
+/// Helper function for serde default value
+fn default_true() -> bool {
+    true
+}
+
 /// Process isolation configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IsolateConfig {
@@ -40,6 +45,11 @@ pub struct IsolateConfig {
     /// Inherit file descriptors from parent process
     #[serde(default)]
     pub inherit_fds: bool,
+    /// Enable seccomp syscall filtering
+    #[serde(default = "default_true")]
+    pub enable_seccomp: bool,
+    /// Language-specific seccomp profile
+    pub seccomp_profile: Option<String>,
 }
 
 impl Default for IsolateConfig {
@@ -61,6 +71,8 @@ impl Default for IsolateConfig {
             allowed_syscalls: None,
             strict_mode: false,
             inherit_fds: false,
+            enable_seccomp: true,
+            seccomp_profile: None,
         }
     }
 }

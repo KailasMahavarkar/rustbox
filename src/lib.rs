@@ -5,4 +5,6 @@ pub mod cgroup;
 pub mod cli;
 pub mod executor;
 pub mod isolate;
+pub mod seccomp;
+pub mod seccomp_native;
 pub mod types;

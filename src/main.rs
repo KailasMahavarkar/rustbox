@@ -6,6 +6,8 @@ mod cgroup;
 mod cli;
 mod executor;
 mod isolate;
+mod seccomp;
+mod seccomp_native;
 mod types;
 
 fn main() -> Result<()> {
@@ -27,6 +29,16 @@ fn main() -> Result<()> {
     if !crate::cgroup::cgroups_available() {
         eprintln!("Warning: cgroups not available - resource limits will not be enforced");
         eprintln!("Make sure /proc/cgroups and /sys/fs/cgroup are available");
+    }
+
+    // Check seccomp availability  
+    if crate::seccomp::is_seccomp_supported() {
+        eprintln!("Info: libseccomp available - full syscall filtering enabled");
+    } else if crate::seccomp_native::NativeSeccompFilter::is_supported() {
+        eprintln!("Info: native seccomp available - basic protection enabled");
+    } else {
+        eprintln!("Warning: seccomp not supported - syscall filtering will not be available");
+        eprintln!("Kernel must support seccomp for security filtering");
     }
 
     // Run the CLI
