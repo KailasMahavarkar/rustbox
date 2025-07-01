@@ -1,10 +1,12 @@
 /// Process execution and monitoring
 use crate::cgroup::CgroupController;
+use crate::filesystem::FilesystemSecurity;
 use crate::seccomp::SeccompFilter;
 use crate::seccomp_native::NativeSeccompFilter;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig, IsolateError, Result};
 use std::fs;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,6 +18,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 pub struct ProcessExecutor {
     config: IsolateConfig,
     cgroup: Option<CgroupController>,
+    filesystem: FilesystemSecurity,
 }
 
 impl ProcessExecutor {
@@ -56,7 +59,14 @@ impl ProcessExecutor {
             None
         };
 
-        Ok(Self { config, cgroup })
+        // Initialize filesystem security
+        let filesystem = FilesystemSecurity::new(
+            config.chroot_dir.clone(),
+            config.workdir.clone(),
+            config.strict_mode,
+        );
+
+        Ok(Self { config, cgroup, filesystem })
     }
 
     /// Setup resource limits using cgroups
@@ -103,7 +113,7 @@ impl ProcessExecutor {
         }
 
         // Configure command
-        cmd.current_dir(&self.config.workdir)
+        cmd.current_dir(&self.filesystem.get_effective_workdir())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -125,10 +135,19 @@ impl ProcessExecutor {
         if let Some(uid) = self.config.uid {
             let enable_seccomp = self.config.enable_seccomp;
             let seccomp_profile = self.config.seccomp_profile.clone();
+            let chroot_dir = self.config.chroot_dir.clone();
             
             unsafe {
                 cmd.pre_exec(move || {
-                    // Set UID/GID first
+                    // Apply chroot first if configured
+                    if let Some(ref chroot_path) = chroot_dir {
+                        let fs_security = FilesystemSecurity::new(Some(chroot_path.clone()), PathBuf::from("/"), false);
+                        fs_security.apply_chroot().map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
+                        })?;
+                    }
+                    
+                    // Set UID/GID after chroot
                     nix::unistd::setuid(nix::unistd::Uid::from_raw(uid)).map_err(|e| {
                         std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
                     })?;
@@ -141,12 +160,27 @@ impl ProcessExecutor {
                     Ok(())
                 });
             }
-        } else if self.config.enable_seccomp {
-            // Apply seccomp even without UID change
+        } else if self.config.enable_seccomp || self.config.chroot_dir.is_some() {
+            // Apply seccomp and/or chroot even without UID change
             let seccomp_profile = self.config.seccomp_profile.clone();
+            let enable_seccomp = self.config.enable_seccomp;
+            let chroot_dir = self.config.chroot_dir.clone();
+            
             unsafe {
                 cmd.pre_exec(move || {
-                    Self::apply_seccomp_filter_in_child(seccomp_profile.as_deref())?;
+                    // Apply chroot first if configured
+                    if let Some(ref chroot_path) = chroot_dir {
+                        let fs_security = FilesystemSecurity::new(Some(chroot_path.clone()), PathBuf::from("/"), false);
+                        fs_security.apply_chroot().map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, e)
+                        })?;
+                    }
+                    
+                    // Apply seccomp filter
+                    if enable_seccomp {
+                        Self::apply_seccomp_filter_in_child(seccomp_profile.as_deref())?;
+                    }
+                    
                     Ok(())
                 });
             }
@@ -329,22 +363,10 @@ impl ProcessExecutor {
         }
     }
 
-    /// Setup working directory
+    /// Setup working directory and filesystem isolation
     fn setup_workdir(&self) -> Result<()> {
-        if !self.config.workdir.exists() {
-            fs::create_dir_all(&self.config.workdir).map_err(IsolateError::Io)?;
-        }
-
-        // Set permissions if needed
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&self.config.workdir)?;
-            let mut perms = metadata.permissions();
-            perms.set_mode(0o755); // rwxr-xr-x
-            fs::set_permissions(&self.config.workdir, perms)?;
-        }
-
+        // Setup filesystem isolation (including chroot if configured)
+        self.filesystem.setup_isolation()?;
         Ok(())
     }
 
@@ -353,6 +375,10 @@ impl ProcessExecutor {
         if let Some(cgroup) = self.cgroup.take() {
             cgroup.cleanup()?;
         }
+        
+        // Cleanup filesystem isolation
+        self.filesystem.cleanup()?;
+        
         Ok(())
     }
 

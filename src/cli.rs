@@ -99,6 +99,10 @@ pub enum Commands {
         #[arg(long)]
         strict: bool,
 
+        /// Chroot directory for filesystem isolation
+        #[arg(long)]
+        chroot: Option<PathBuf>,
+
         /// Environment variable (can be used multiple times): -E VAR=value
         #[arg(short = 'E', long = "env", value_name = "VAR=VALUE")]
         env_vars: Vec<String>,
@@ -110,6 +114,32 @@ pub enum Commands {
         /// Inherit file descriptors from parent process
         #[arg(long)]
         inherit_fds: bool,
+
+        /// Redirect stdout to file
+        #[arg(long)]
+        stdout_file: Option<PathBuf>,
+
+        /// Redirect stderr to file
+        #[arg(long)]
+        stderr_file: Option<PathBuf>,        /// Redirect stdin from file
+        #[arg(long)]
+        stdin_file: Option<PathBuf>,
+
+        /// Enable TTY support for interactive programs
+        #[arg(long)]
+        enable_tty: bool,
+
+        /// Use pipes for real-time I/O instead of files
+        #[arg(long)]
+        use_pipes: bool,
+
+        /// I/O buffer size in bytes
+        #[arg(long, default_value = "8192")]
+        io_buffer_size: usize,
+
+        /// Text encoding for I/O operations
+        #[arg(long, default_value = "utf-8")]
+        text_encoding: String,
     },
 
     /// Execute a source file directly
@@ -169,6 +199,34 @@ pub enum Commands {
         /// Inherit file descriptors from parent process
         #[arg(long)]
         inherit_fds: bool,
+
+        /// Redirect stdout to file
+        #[arg(long)]
+        stdout_file: Option<PathBuf>,
+
+        /// Redirect stderr to file
+        #[arg(long)]
+        stderr_file: Option<PathBuf>,
+
+        /// Redirect stdin from file
+        #[arg(long)]
+        stdin_file: Option<PathBuf>,
+
+        /// Enable TTY support for interactive programs
+        #[arg(long)]
+        enable_tty: bool,
+
+        /// Use pipes for real-time I/O instead of files
+        #[arg(long)]
+        use_pipes: bool,
+
+        /// I/O buffer size in bytes
+        #[arg(long, default_value = "8192")]
+        io_buffer_size: usize,
+
+        /// Text encoding for I/O operations
+        #[arg(long, default_value = "utf-8")]
+        text_encoding: String,
     },
 
     /// List all isolate instances
@@ -337,9 +395,17 @@ pub fn run() -> anyhow::Result<()> {
             max_memory,
             max_time,
             strict,
+            chroot,
             env_vars,
             full_env,
             inherit_fds,
+            stdout_file,
+            stderr_file,
+            stdin_file,
+            enable_tty,
+            use_pipes,
+            io_buffer_size,
+            text_encoding,
         } => {
             let mut isolate = match Isolate::load(&box_id)? {
                 Some(mut isolate) => {
@@ -349,11 +415,25 @@ pub fn run() -> anyhow::Result<()> {
                         config.strict_mode = true;
                     }
 
+                    // Update chroot directory
+                    if let Some(chroot_dir) = chroot {
+                        config.chroot_dir = Some(chroot_dir);
+                    }
+
                     // Update environment variables
                     config.environment = parse_environment_vars(&env_vars, full_env);
 
                     // Update inherit_fds
                     config.inherit_fds = inherit_fds;
+
+                    // Update I/O redirection
+                    config.stdout_file = stdout_file;
+                    config.stderr_file = stderr_file;
+                    config.stdin_file = stdin_file;
+                    config.enable_tty = enable_tty;
+                    config.use_pipes = use_pipes;
+                    config.io_buffer_size = io_buffer_size;
+                    config.text_encoding = text_encoding;
 
                     isolate = Isolate::new(config)?;
                     isolate
@@ -460,6 +540,13 @@ pub fn run() -> anyhow::Result<()> {
             env_vars,
             full_env,
             inherit_fds,
+            stdout_file,
+            stderr_file,
+            stdin_file,
+            enable_tty,
+            use_pipes,
+            io_buffer_size,
+            text_encoding,
         } => {
             let mut isolate = match Isolate::load(&box_id)? {
                 Some(mut isolate) => {
@@ -474,6 +561,10 @@ pub fn run() -> anyhow::Result<()> {
 
                     // Update inherit_fds
                     config.inherit_fds = inherit_fds;
+
+                    // Update I/O redirection
+                    config.stdout_file = stdout_file;
+                    config.stderr_file = stderr_file;
 
                     isolate = Isolate::new(config)?;
                     isolate

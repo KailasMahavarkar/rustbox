@@ -50,6 +50,21 @@ pub struct IsolateConfig {
     pub enable_seccomp: bool,
     /// Language-specific seccomp profile
     pub seccomp_profile: Option<String>,
+    /// Redirect stdout to file (optional)
+    pub stdout_file: Option<PathBuf>,
+    /// Redirect stderr to file (optional)
+    pub stderr_file: Option<PathBuf>,    /// Enable TTY support for interactive programs
+    pub enable_tty: bool,
+    /// Use pipes for real-time I/O instead of files
+    pub use_pipes: bool,
+    /// Input data to send to stdin
+    pub stdin_data: Option<String>,
+    /// Redirect stdin from file (optional)
+    pub stdin_file: Option<PathBuf>,
+    /// Buffer size for I/O operations (bytes)
+    pub io_buffer_size: usize,
+    /// Text encoding for I/O operations
+    pub text_encoding: String,
 }
 
 impl Default for IsolateConfig {
@@ -73,6 +88,14 @@ impl Default for IsolateConfig {
             inherit_fds: false,
             enable_seccomp: true,
             seccomp_profile: None,
+            stdout_file: None,
+            stderr_file: None,
+            enable_tty: false,
+            use_pipes: false,
+            stdin_data: None,
+            stdin_file: None,
+            io_buffer_size: 8192, // 8KB default buffer
+            text_encoding: "utf-8".to_string(),
         }
     }
 }

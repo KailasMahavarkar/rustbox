@@ -5,6 +5,8 @@ use anyhow::Result;
 mod cgroup;
 mod cli;
 mod executor;
+mod filesystem;
+mod io_handler;
 mod isolate;
 mod seccomp;
 mod seccomp_native;
