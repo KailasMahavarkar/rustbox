@@ -2,8 +2,7 @@
 /// Provides comprehensive I/O redirection, TTY support, and real-time communication
 use crate::types::{IsolateConfig, IsolateError, Result};
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Read, Write};
-use std::os::unix::io::RawFd;
+use std::io::{BufWriter, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 
@@ -11,7 +10,7 @@ use std::thread;
 use std::os::unix::fs::OpenOptionsExt;
 
 /// I/O handler for managing stdin, stdout, stderr with advanced security features
-/// 
+///
 /// Security considerations:
 /// - All file operations use restricted permissions
 /// - Buffer sizes are limited to prevent memory exhaustion
@@ -20,14 +19,11 @@ use std::os::unix::fs::OpenOptionsExt;
 pub struct IoHandler {
     config: IsolateConfig,
     stdin_handle: Option<Box<dyn Write + Send>>,
-    // Note: stdout_handle and stderr_handle are reserved for future real-time I/O
-    stdout_handle: Option<Box<dyn Read + Send>>,
-    stderr_handle: Option<Box<dyn Read + Send>>,
 }
 
 impl IoHandler {
     /// Create a new I/O handler with security-focused configuration
-    /// 
+    ///
     /// # Security Features
     /// - Validates all file paths to prevent directory traversal
     /// - Sets restrictive file permissions (0o600)
@@ -36,20 +32,18 @@ impl IoHandler {
         // Validate configuration for security
         if config.io_buffer_size > 1024 * 1024 {
             return Err(IsolateError::Config(
-                "I/O buffer size too large (max 1MB for security)".to_string()
+                "I/O buffer size too large (max 1MB for security)".to_string(),
             ));
         }
 
         Ok(Self {
             config,
             stdin_handle: None,
-            stdout_handle: None,
-            stderr_handle: None,
         })
     }
 
     /// Configure command with secure I/O redirection
-    /// 
+    ///
     /// # Security Notes
     /// - All output files are created with restrictive permissions (0o600)
     /// - File paths are validated to prevent directory traversal attacks
@@ -110,7 +104,7 @@ impl IoHandler {
     }
 
     /// Configure TTY support with security restrictions
-    /// 
+    ///
     /// # Security Considerations
     /// - TTY access is limited and monitored
     /// - Only basic terminal functionality is provided
@@ -127,7 +121,7 @@ impl IoHandler {
     }
 
     /// Start I/O handling with security monitoring
-    /// 
+    ///
     /// # Security Features
     /// - Monitors I/O operations for suspicious activity
     /// - Enforces buffer size limits to prevent DoS
@@ -139,7 +133,7 @@ impl IoHandler {
                 // Validate stdin data size for security
                 if stdin_data.len() > self.config.io_buffer_size * 10 {
                     return Err(IsolateError::Config(
-                        "Stdin data too large for security".to_string()
+                        "Stdin data too large for security".to_string(),
                     ));
                 }
 
@@ -165,7 +159,7 @@ impl IoHandler {
     }
 
     /// Get output with security validation
-    /// 
+    ///
     /// # Security Notes
     /// - Output size is limited to prevent memory exhaustion
     /// - Content is validated for suspicious patterns
@@ -206,7 +200,7 @@ impl IoHandler {
     }
 
     /// Send data to stdin with security validation
-    /// 
+    ///
     /// # Security Features
     /// - Input size validation to prevent buffer overflow
     /// - Content filtering to prevent injection attacks
@@ -215,7 +209,7 @@ impl IoHandler {
         // Security validation
         if data.len() > self.config.io_buffer_size {
             return Err(IsolateError::Config(
-                "Stdin data exceeds buffer limit for security".to_string()
+                "Stdin data exceeds buffer limit for security".to_string(),
             ));
         }
 
@@ -223,7 +217,7 @@ impl IoHandler {
         // Prevent null bytes and control characters that could cause issues
         if data.contains('\0') {
             return Err(IsolateError::Config(
-                "Stdin data contains null bytes (security risk)".to_string()
+                "Stdin data contains null bytes (security risk)".to_string(),
             ));
         }
 
@@ -255,7 +249,7 @@ impl IoHandler {
         // Convert to absolute path for validation
         let abs_path = path.canonicalize()
             .map_err(|_| IsolateError::Config(
-                "Invalid file path or file does not exist".to_string()
+                "Invalid file path or file does not exist".to_string(),
             ))?;
 
         // Ensure path is within allowed directories (basic security check)
@@ -270,26 +264,17 @@ impl IoHandler {
         for forbidden in &forbidden_paths {
             if path_str.starts_with(forbidden) {
                 return Err(IsolateError::Config(
-                    format!("Access to {} is forbidden for security", forbidden)
+                    format!("Access to {} is forbidden for security", forbidden),
                 ));
             }
         }
 
         Ok(())
     }
-
-    /// Create PTY for advanced terminal support (security-restricted)
-    fn create_pty(&self) -> Result<(RawFd, RawFd)> {
-        // PTY creation would require additional security measures
-        // For now, this is a placeholder that returns an error
-        Err(IsolateError::Config(
-            "PTY creation not implemented for security reasons".to_string()
-        ))
-    }
 }
 
 /// Builder pattern for secure I/O configuration
-/// 
+///
 /// Provides a fluent interface for configuring I/O settings with built-in security validation
 pub struct IoConfigBuilder {
     config: IsolateConfig,
@@ -365,7 +350,7 @@ impl IoConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+
 
     #[test]
     fn test_io_handler_creation() {

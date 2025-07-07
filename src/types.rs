@@ -1,4 +1,4 @@
-/// Core types and structures for the rustbox system
+use std::os::unix::process::ExitStatusExt;/// Core types and structures for the rustbox system
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -77,6 +77,8 @@ pub struct IsolateConfig {
     pub enable_mount_namespace: bool,
     pub enable_network_namespace: bool,
     pub enable_user_namespace: bool,
+    /// Use multi-process architecture for production reliability
+    pub use_multiprocess: bool,
 }
 
 impl Default for IsolateConfig {
@@ -116,12 +118,13 @@ impl Default for IsolateConfig {
             enable_mount_namespace: true,
             enable_network_namespace: true,
             enable_user_namespace: false, // User namespace can be complex, disabled by default
+            use_multiprocess: false, // Single-process by default for compatibility
         }
     }
 }
 
 /// Execution result from an isolated process
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ExecutionResult {
     /// Exit code of the process
     pub exit_code: Option<i32>,
@@ -222,3 +225,38 @@ pub enum IsolateError {
 
 /// Result type alias for rustbox operations
 pub type Result<T> = std::result::Result<T, IsolateError>;
+impl From<std::process::Output> for ExecutionResult {
+    fn from(output: std::process::Output) -> Self {
+        let status = if output.status.success() {
+            ExecutionStatus::Success
+        } else {
+            ExecutionStatus::RuntimeError
+        };
+
+        Self {
+            exit_code: output.status.code(),
+            status,
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            cpu_time: 0.0, // Not available from std::process::Output
+            wall_time: 0.0, // Not available from std::process::Output
+            memory_peak: 0, // Not available from std::process::Output
+            signal: output.status.signal(),
+            success: output.status.success(),
+            error_message: None,
+        }
+    }
+}
+impl From<nix::errno::Errno> for IsolateError {
+    fn from(err: nix::errno::Errno) -> Self {
+        IsolateError::Process(err.to_string())
+    }
+}impl Default for ExecutionStatus {
+    fn default() -> Self {
+        ExecutionStatus::Success
+    }
+}impl From<caps::errors::CapsError> for IsolateError {
+    fn from(err: caps::errors::CapsError) -> Self {
+        IsolateError::Process(err.to_string())
+    }
+}

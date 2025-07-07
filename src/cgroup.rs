@@ -2,47 +2,45 @@
 use crate::types::{IsolateError, Result};
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::io::{self};
+use std::path::{Path, PathBuf};
 
-/// Enhanced cgroup controller with improved reliability and error handling
-pub struct CgroupController {
+pub struct Cgroup {
     name: String,
-    cgroup_path: std::path::PathBuf,
+    cgroup_path: PathBuf,
     available_controllers: HashSet<String>,
     has_cgroup_support: bool,
 }
 
-impl CgroupController {
-    /// Create a new cgroup controller with availability checks
+impl Cgroup {
     pub fn new(name: &str, strict_mode: bool) -> Result<Self> {
         let cgroup_base = "/sys/fs/cgroup";
         let cgroup_path = Path::new(cgroup_base).join("memory").join(name);
 
-        // Check if cgroups are available
         let cgroups_available = Self::cgroups_available();
         if !cgroups_available {
             if strict_mode {
                 return Err(IsolateError::Cgroup(
-                    "Cgroups not available on this system".to_string()
+                    "Cgroups not available on this system".to_string(),
                 ));
             } else {
                 eprintln!("Warning: Cgroups not available. Resource limits will not be enforced.");
                 return Ok(Self {
                     name: name.to_string(),
-                    cgroup_path: std::path::PathBuf::new(),
+                    cgroup_path: PathBuf::new(),
                     available_controllers: HashSet::new(),
                     has_cgroup_support: false,
                 });
             }
         }
 
-        // Get available controllers
         let available_controllers = match Self::get_available_controllers() {
             Ok(controllers) => controllers,
             Err(e) => {
                 if strict_mode {
                     return Err(IsolateError::Cgroup(format!(
-                        "Failed to get available controllers: {}", e
+                        "Failed to get available controllers: {}",
+                        e
                     )));
                 } else {
                     eprintln!("Warning: Failed to get available controllers: {}", e);
@@ -51,7 +49,6 @@ impl CgroupController {
             }
         };
 
-        // Check required controllers in strict mode
         if strict_mode {
             let required_controllers = vec!["memory", "cpu", "cpuacct"];
             for controller in &required_controllers {
@@ -64,19 +61,18 @@ impl CgroupController {
             }
         }
 
-        // Try to create the cgroup directory
         match fs::create_dir_all(&cgroup_path) {
             Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
                 if strict_mode {
                     return Err(IsolateError::Cgroup(
-                        "Permission denied creating cgroup. Run with sudo for resource limits, or remove --strict flag.".to_string()
+                        "Permission denied creating cgroup. Run with sudo for resource limits, or remove --strict flag.".to_string(),
                     ));
                 } else {
                     eprintln!("Warning: Cannot create cgroup (permission denied). Resource limits will not be enforced.");
                     return Ok(Self {
                         name: name.to_string(),
-                        cgroup_path: std::path::PathBuf::new(),
+                        cgroup_path: PathBuf::new(),
                         available_controllers,
                         has_cgroup_support: false,
                     });
@@ -90,7 +86,7 @@ impl CgroupController {
                     eprintln!("Warning: {}", error_msg);
                     return Ok(Self {
                         name: name.to_string(),
-                        cgroup_path: std::path::PathBuf::new(),
+                        cgroup_path: PathBuf::new(),
                         available_controllers,
                         has_cgroup_support: false,
                     });
@@ -106,31 +102,26 @@ impl CgroupController {
         })
     }
 
-    /// Set memory limit in bytes with improved swap handling
     pub fn set_memory_limit(&self, limit_bytes: u64) -> Result<()> {
         if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
             return Ok(());
         }
 
-        // Set main memory limit
         self.write_cgroup_file("memory.limit_in_bytes", &limit_bytes.to_string())?;
 
-        // Only set memory+swap limit if the file exists (swap accounting enabled)
         let memsw_file = self.cgroup_path.join("memory.memsw.limit_in_bytes");
         if memsw_file.exists() {
-            // Set memory+swap to same limit to prevent swap usage
             let _ = self.write_cgroup_file("memory.memsw.limit_in_bytes", &limit_bytes.to_string());
         }
 
         Ok(())
     }
 
-    /// Set CPU limit using shares (relative weighting)
     pub fn set_cpu_limit(&self, cpu_shares: u64) -> Result<()> {
         if !self.has_cgroup_support || !self.available_controllers.contains("cpu") {
             return Ok(());
         }
-        
+
         let cpu_path = Path::new("/sys/fs/cgroup/cpu").join(&self.name);
         if let Err(e) = fs::create_dir_all(&cpu_path) {
             eprintln!("Warning: Failed to create CPU cgroup: {}", e);
@@ -142,7 +133,6 @@ impl CgroupController {
             eprintln!("Warning: Failed to set CPU shares: {}", e);
         }
 
-        // Also create cpuacct cgroup for CPU time tracking
         if self.available_controllers.contains("cpuacct") {
             let cpuacct_path = Path::new("/sys/fs/cgroup/cpuacct").join(&self.name);
             let _ = fs::create_dir_all(&cpuacct_path);
@@ -151,12 +141,11 @@ impl CgroupController {
         Ok(())
     }
 
-    /// Set process/task limit
     pub fn set_process_limit(&self, limit: u64) -> Result<()> {
         if !self.has_cgroup_support || !self.available_controllers.contains("pids") {
             return Ok(());
         }
-        
+
         let pids_path = Path::new("/sys/fs/cgroup/pids").join(&self.name);
         if let Err(e) = fs::create_dir_all(&pids_path) {
             eprintln!("Warning: Failed to create PIDs cgroup: {}", e);
@@ -171,22 +160,19 @@ impl CgroupController {
         Ok(())
     }
 
-    /// Add a process to this cgroup with better error handling
     pub fn add_process(&self, pid: u32) -> Result<()> {
         if !self.has_cgroup_support {
             return Ok(());
         }
-        
+
         let pid_str = pid.to_string();
 
-        // Add to memory cgroup if available
         if self.available_controllers.contains("memory") {
             if let Err(e) = self.write_cgroup_file("tasks", &pid_str) {
                 eprintln!("Warning: Failed to add process to memory cgroup: {}", e);
             }
         }
 
-        // Add to CPU cgroup if available
         if self.available_controllers.contains("cpu") {
             let cpu_tasks = Path::new("/sys/fs/cgroup/cpu")
                 .join(&self.name)
@@ -198,7 +184,6 @@ impl CgroupController {
             }
         }
 
-        // Add to cpuacct cgroup if available
         if self.available_controllers.contains("cpuacct") {
             let cpuacct_tasks = Path::new("/sys/fs/cgroup/cpuacct")
                 .join(&self.name)
@@ -210,7 +195,6 @@ impl CgroupController {
             }
         }
 
-        // Add to PIDs cgroup if available
         if self.available_controllers.contains("pids") {
             let pids_tasks = Path::new("/sys/fs/cgroup/pids")
                 .join(&self.name)
@@ -225,7 +209,6 @@ impl CgroupController {
         Ok(())
     }
 
-    /// Get peak memory usage
     pub fn get_peak_memory_usage(&self) -> Result<u64> {
         if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
             return Ok(0);
@@ -238,13 +221,11 @@ impl CgroupController {
             .map_err(|e| IsolateError::Cgroup(format!("Failed to parse peak memory usage: {}", e)))
     }
 
-    /// Simplified and more reliable CPU usage tracking
     pub fn get_cpu_usage(&self) -> Result<f64> {
         if !self.has_cgroup_support || !self.available_controllers.contains("cpuacct") {
             return Ok(0.0);
         }
 
-        // Method 1: Try cpuacct.usage (most reliable - nanosecond precision)
         let cpuacct_usage_path = Path::new("/sys/fs/cgroup/cpuacct")
             .join(&self.name)
             .join("cpuacct.usage");
@@ -253,7 +234,6 @@ impl CgroupController {
             if let Ok(usage_content) = fs::read_to_string(&cpuacct_usage_path) {
                 if let Ok(usage_ns) = usage_content.trim().parse::<u64>() {
                     if usage_ns > 0 {
-                        // Convert nanoseconds to seconds with high precision
                         let cpu_time = usage_ns as f64 / 1_000_000_000.0;
                         return Ok(cpu_time);
                     }
@@ -261,7 +241,6 @@ impl CgroupController {
             }
         }
 
-        // Method 2: Try cpuacct.stat for user+system breakdown
         let cpuacct_stat_path = Path::new("/sys/fs/cgroup/cpuacct")
             .join(&self.name)
             .join("cpuacct.stat");
@@ -270,7 +249,7 @@ impl CgroupController {
             if let Ok(stat_content) = fs::read_to_string(&cpuacct_stat_path) {
                 let mut user_time = 0u64;
                 let mut sys_time = 0u64;
-                
+
                 for line in stat_content.lines() {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 2 {
@@ -285,27 +264,23 @@ impl CgroupController {
                         }
                     }
                 }
-                
+
                 if user_time > 0 || sys_time > 0 {
-                    // cpuacct.stat values are in USER_HZ (typically 100Hz)
                     let total_time = user_time + sys_time;
-                    let cpu_time = total_time as f64 / 100.0; // Convert USER_HZ to seconds
+                    let cpu_time = total_time as f64 / 100.0;
                     return Ok(cpu_time);
                 }
             }
         }
 
-        // Fallback: return 0.0 (will trigger /proc fallback in executor if needed)
         Ok(0.0)
     }
 
-    /// Remove the cgroup when done
     pub fn cleanup(&self) -> Result<()> {
         if !self.has_cgroup_support {
             return Ok(());
         }
 
-        // Remove cgroup directories (they must be empty first)
         let dirs = [
             &self.cgroup_path,
             &Path::new("/sys/fs/cgroup/cpu").join(&self.name),
@@ -323,56 +298,51 @@ impl CgroupController {
         Ok(())
     }
 
-    /// Get available cgroup controllers from /proc/cgroups
     fn get_available_controllers() -> Result<HashSet<String>> {
         let content = fs::read_to_string("/proc/cgroups")
             .map_err(|e| IsolateError::Cgroup(format!("Failed to read /proc/cgroups: {}", e)))?;
-        
+
         let mut controllers = HashSet::new();
-        
-        for line in content.lines().skip(1) { // Skip header line
+
+        for line in content.lines().skip(1) {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 4 {
                 let controller_name = parts[0];
                 let enabled = parts[3] == "1";
-                
+
                 if enabled {
                     controllers.insert(controller_name.to_string());
                 }
             }
         }
-        
+
         Ok(controllers)
     }
 
-    /// Check if cgroups are available on the system
-    fn cgroups_available() -> bool {
+    pub fn cgroups_available() -> bool {
         Path::new("/proc/cgroups").exists() && Path::new("/sys/fs/cgroup").exists()
     }
 
-    /// Helper to write to cgroup files with better error handling
     fn write_cgroup_file(&self, filename: &str, content: &str) -> Result<()> {
         if !self.has_cgroup_support {
             return Ok(());
         }
-        
+
         let file_path = self.cgroup_path.join(filename);
         fs::write(file_path, content)
             .map_err(|e| IsolateError::Cgroup(format!("Failed to write {}: {}", filename, e)))
     }
 
-    /// Helper to read from cgroup files with better error handling
     fn read_cgroup_file(&self, filename: &str) -> Result<String> {
         if !self.has_cgroup_support {
             return Ok("0".to_string());
         }
-        
+
         let file_path = self.cgroup_path.join(filename);
         fs::read_to_string(file_path)
             .map_err(|e| IsolateError::Cgroup(format!("Failed to read {}: {}", filename, e)))
     }
 
-    /// Get information about this cgroup's configuration
     pub fn get_info(&self) -> CgroupInfo {
         CgroupInfo {
             name: self.name.clone(),
@@ -386,14 +356,12 @@ impl CgroupController {
     }
 }
 
-impl Drop for CgroupController {
+impl Drop for Cgroup {
     fn drop(&mut self) {
-        // Attempt cleanup on drop, but don't panic if it fails
         let _ = self.cleanup();
     }
 }
 
-/// Information about cgroup configuration and availability
 #[derive(Debug, Clone)]
 pub struct CgroupInfo {
     pub name: String,
@@ -405,12 +373,10 @@ pub struct CgroupInfo {
     pub pids_controller: bool,
 }
 
-/// Check if cgroups are available on the system
 pub fn cgroups_available() -> bool {
-    CgroupController::cgroups_available()
+    Cgroup::cgroups_available()
 }
 
-/// Get cgroup mount point
 pub fn get_cgroup_mount() -> Result<String> {
     if !cgroups_available() {
         return Err(IsolateError::Cgroup(
@@ -418,11 +384,9 @@ pub fn get_cgroup_mount() -> Result<String> {
         ));
     }
 
-    // For cgroup v1, typically mounted at /sys/fs/cgroup
     Ok("/sys/fs/cgroup".to_string())
 }
 
-/// Get available controllers on the system
 pub fn get_available_controllers() -> Result<HashSet<String>> {
-    CgroupController::get_available_controllers()
+    Cgroup::get_available_controllers()
 }

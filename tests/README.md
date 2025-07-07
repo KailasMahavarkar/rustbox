@@ -35,6 +35,12 @@ End-to-end workflow and complex scenario testing
 Performance benchmarks and optimization metrics
 - **benchmark.sh** - Startup time, execution overhead, memory usage, and throughput testing
 
+### 📁 Cleanup Tests (`tests/cleanup/`)
+Process cleanup and resource management validation
+- **cleanup_integration.sh** - Basic cleanup scenarios and resource management
+- **multiprocess_cleanup.sh** - Multi-process architecture cleanup verification
+- **cleanup_stress.sh** - Cleanup reliability under high load and edge conditions
+
 ## Running Tests
 
 ### Quick Start
@@ -42,11 +48,13 @@ Performance benchmarks and optimization metrics
 # Run all tests in a category
 sudo ./run_category.sh core
 sudo ./run_category.sh security
+sudo ./run_category.sh cleanup
 sudo ./run_category.sh all
 
 # Run specific test within category
 sudo ./run_category.sh stress parallel
 sudo ./run_category.sh performance benchmark
+sudo ./run_category.sh cleanup integration
 ```
 
 ### Individual Test Execution
@@ -62,6 +70,11 @@ sudo ./security/isolation_test.sh
 
 # Performance benchmarks
 sudo ./performance/benchmark.sh
+
+# Cleanup tests
+sudo ./cleanup/cleanup_integration.sh
+sudo ./cleanup/multiprocess_cleanup.sh
+sudo ./cleanup/cleanup_stress.sh
 
 # Stress testing
 sudo ./stress/sequential.sh
@@ -123,6 +136,16 @@ System performance characteristics:
 - Throughput (target: >2 ops/sec)
 
 **Expected Results**: Performance within acceptable bounds
+
+### Cleanup Tests
+Process cleanup and resource management:
+- Basic cleanup after normal execution
+- Multi-process architecture cleanup
+- Cleanup under resource pressure
+- Emergency cleanup scenarios
+- Process leak prevention
+
+**Expected Results**: All processes cleaned up reliably, no resource leaks
 
 ## Requirements
 

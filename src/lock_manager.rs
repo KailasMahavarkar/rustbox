@@ -2,7 +2,6 @@
 /// Based on isolate-reference lock file format for compatibility
 
 use crate::types::{IsolateError, Result};
-use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::io::AsRawFd;
@@ -269,7 +268,7 @@ impl Drop for BoxLockManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+
     use tempfile::TempDir;
 
     #[test]

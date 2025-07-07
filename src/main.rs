@@ -1,4 +1,4 @@
-/// rustbox: Secure Process Isolation and Resource Control System
+mod cleanup;/// rustbox: Secure Process Isolation and Resource Control System
 /// 
 /// A modern, Rust-based implementation inspired by IOI Isolate, designed for secure
 /// execution of untrusted code with comprehensive resource limits and namespace isolation.
@@ -21,19 +21,21 @@
 /// rustbox run --box-id 0 --mem 128 --time 10 /usr/bin/python3 solution.py
 /// rustbox cleanup --box-id 0
 /// ```
-use anyhow::Result;
+use rustbox::*;use anyhow::Result;
 
-mod cgroup;
-mod cli;
-mod executor;
-mod filesystem;
-mod io_handler;
-mod isolate;
-mod namespace;
-mod resource_limits;
-mod seccomp;
-mod seccomp_native;
-mod types;
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 fn main() -> Result<()> {
     // Initialize structured logging for security monitoring
@@ -57,10 +59,10 @@ fn main() -> Result<()> {
     }
 
     // Security subsystem availability checks
-    perform_security_checks();
+    perform_security_checks();    Ok(())
 
     // Run the command-line interface
-    cli::run()
+    
 }
 
 /// Perform comprehensive security subsystem checks
@@ -80,8 +82,6 @@ fn perform_security_checks() {
     // Check seccomp availability for syscall filtering
     if crate::seccomp::is_seccomp_supported() {
         eprintln!("✅ libseccomp available - comprehensive syscall filtering enabled");
-    } else if crate::seccomp_native::NativeSeccompFilter::is_supported() {
-        eprintln!("✅ native seccomp available - basic syscall protection enabled");
     } else {
         eprintln!("⚠️  Warning: seccomp not supported - syscall filtering unavailable");
         eprintln!("   Kernel must support CONFIG_SECCOMP and CONFIG_SECCOMP_FILTER");

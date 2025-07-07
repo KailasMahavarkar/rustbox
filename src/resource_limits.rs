@@ -256,7 +256,7 @@ pub fn resource_limits_supported() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
+
     use tempfile;
 
     #[test]

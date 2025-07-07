@@ -1,7 +1,8 @@
 /// Process execution and monitoring with reliable resource limits
-use crate::cgroup::CgroupController;
+use crate::cgroup::Cgroup;
 use crate::filesystem::FilesystemSecurity;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig, IsolateError, Result};
+use crate::multiprocess::MultiProcessExecutor;
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -13,7 +14,7 @@ use std::os::unix::process::ExitStatusExt;
 /// Process executor that handles isolation and monitoring with focus on reliability
 pub struct ProcessExecutor {
     config: IsolateConfig,
-    cgroup: Option<CgroupController>,
+    cgroup: Option<Cgroup>,
     filesystem_security: FilesystemSecurity,
 }
 
@@ -21,7 +22,7 @@ impl ProcessExecutor {
     /// Create a new process executor
     pub fn new(config: IsolateConfig) -> Result<Self> {
         let cgroup = if crate::cgroup::cgroups_available() {
-            match CgroupController::new(&config.instance_id, config.strict_mode) {
+            match Cgroup::new(&config.instance_id, config.strict_mode) {
                 Ok(cgroup) => Some(cgroup),
                 Err(e) => {
                     eprintln!("Failed to create cgroup controller: {:?}", e);
@@ -75,8 +76,31 @@ impl ProcessExecutor {
         Ok(())
     }
 
-    /// Execute a command with minimal isolation for maximum reliability
+    /// Execute command with multi-process architecture for production reliability
+    pub fn execute_multiprocess(
+        &mut self,
+        command: &[String],
+        stdin_data: Option<&str>,
+    ) -> Result<ExecutionResult> {
+        let mut multiprocess_executor = MultiProcessExecutor::new(self.config.clone())?;
+        multiprocess_executor.execute(command, stdin_data)
+    }
+
+    /// Execute a command with appropriate isolation method based on configuration
     pub fn execute(
+        &mut self,
+        command: &[String],
+        stdin_data: Option<&str>,
+    ) -> Result<ExecutionResult> {
+        if self.config.use_multiprocess {
+            self.execute_multiprocess(command, stdin_data)
+        } else {
+            self.execute_single_process(command, stdin_data)
+        }
+    }
+
+    /// Execute a command with minimal isolation for maximum reliability
+    pub fn execute_single_process(
         &mut self,
         command: &[String],
         stdin_data: Option<&str>,
