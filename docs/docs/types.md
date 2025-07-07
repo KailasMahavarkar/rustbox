@@ -1,6 +1,6 @@
 # Types Module Documentation
 
-The `types.rs` module defines the core data structures and error types used throughout the Mini-Isolate system.
+The `types.rs` module defines the core data structures and error types used throughout the rustbox system.
 
 ## Core Data Structures
 
@@ -50,7 +50,7 @@ impl Default for IsolateConfig {
     fn default() -> Self {
         Self {
             instance_id: uuid::Uuid::new_v4().to_string(),
-            workdir: std::env::temp_dir().join("mini-isolate"),
+            workdir: std::env::temp_dir().join("rustbox"),
             chroot_dir: None,
             uid: None,
             gid: None,

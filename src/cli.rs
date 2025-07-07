@@ -1,4 +1,4 @@
-/// Command Line Interface for the mini-isolate system
+/// Command Line Interface for the rustbox system
 use crate::isolate::Isolate;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig};
 use clap::{Parser, Subcommand};
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "mini-isolate")]
+#[command(name = "rustbox")]
 #[command(about = "A process isolation and resource control system inspired by IOI Isolate", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
@@ -447,7 +447,7 @@ pub fn run() -> anyhow::Result<()> {
                 config.workdir = workdir;
             } else {
                 let mut default_dir = std::env::temp_dir();
-                default_dir.push("mini-isolate");
+                default_dir.push("rustbox");
                 default_dir.push(&box_id);
                 config.workdir = default_dir;
             }
@@ -805,7 +805,7 @@ pub fn run() -> anyhow::Result<()> {
         }
 
         Commands::Info { cgroups } => {
-            println!("Mini-Isolate System Information");
+            println!("rustbox System Information");
             println!("==============================");
 
             // Check cgroup support

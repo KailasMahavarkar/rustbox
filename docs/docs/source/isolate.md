@@ -58,7 +58,7 @@ Creates a new isolate instance with the given configuration.
 
 #### Functionality
 1. **Directory Setup**
-   - Creates base directory under `/tmp/mini-isolate/{instance_id}`
+   - Creates base directory under `/tmp/rustbox/{instance_id}`
    - Ensures directory structure exists before proceeding
 
 2. **Instance Creation**
@@ -310,7 +310,7 @@ Loads all instance configurations from persistent storage.
    - Provides detailed error messages for parsing failures
 
 #### Storage Location
-- **Directory**: `/tmp/mini-isolate/`
+- **Directory**: `/tmp/rustbox/`
 - **File**: `instances.json`
 - **Format**: Pretty-printed JSON
 

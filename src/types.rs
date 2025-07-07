@@ -1,4 +1,4 @@
-/// Core types and structures for the mini-isolate system
+/// Core types and structures for the rustbox system
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -83,7 +83,7 @@ impl Default for IsolateConfig {
     fn default() -> Self {
         Self {
             instance_id: uuid::Uuid::new_v4().to_string(),
-            workdir: std::env::temp_dir().join("mini-isolate"),
+            workdir: std::env::temp_dir().join("rustbox"),
             chroot_dir: None,
             uid: None,
             gid: None,
@@ -189,7 +189,7 @@ pub struct ResourceUsage {
     pub page_faults: u64,
 }
 
-/// Custom error types for mini-isolate
+/// Custom error types for rustbox
 #[derive(Error, Debug)]
 pub enum IsolateError {
     #[error("IO error: {0}")]
@@ -220,5 +220,5 @@ pub enum IsolateError {
     ResourceLimit(String),
 }
 
-/// Result type alias for mini-isolate operations
+/// Result type alias for rustbox operations
 pub type Result<T> = std::result::Result<T, IsolateError>;

@@ -4,7 +4,7 @@
 # Tests security boundaries and potential escape vectors
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 MALICIOUS_PY="$SCRIPT_DIR/malicious.py"
 
 # Colors
@@ -33,7 +33,7 @@ failed=0
 log_info "Test 1: Running malicious script in isolation"
 if sudo $MINI_ISOLATE init --box-id security_malicious --strict >/dev/null 2>&1; then
     # Copy malicious script into isolate
-    sudo cp "$MALICIOUS_PY" "/tmp/mini-isolate/security_malicious/malicious.py"
+    sudo cp "$MALICIOUS_PY" "/tmp/rustbox/security_malicious/malicious.py"
     
     if result=$(sudo $MINI_ISOLATE run --box-id security_malicious --max-memory 50 --max-cpu 5 --max-time 5 python3 -- malicious.py 2>&1); then
         if [[ "$result" == *"Status: Success"* ]]; then

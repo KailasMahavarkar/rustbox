@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_security_creation() {
-        let temp_dir = env::temp_dir().join("mini-isolate-test");
+        let temp_dir = env::temp_dir().join("rustbox-test");
         let fs_security = FilesystemSecurity::new(None, temp_dir.clone(), false);
         
         assert!(!fs_security.is_isolated());
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn test_filesystem_security_with_chroot() {
-        let temp_dir = env::temp_dir().join("mini-isolate-chroot-test");
+        let temp_dir = env::temp_dir().join("rustbox-chroot-test");
         let work_dir = temp_dir.join("work");
         let fs_security = FilesystemSecurity::new(Some(temp_dir), work_dir, false);
         
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_path_validation() {
-        let temp_dir = env::temp_dir().join("mini-isolate-validation-test");
+        let temp_dir = env::temp_dir().join("rustbox-validation-test");
         let fs_security = FilesystemSecurity::new(None, temp_dir.clone(), false);
         
         // Test dangerous path rejection
@@ -374,7 +374,7 @@ mod tests {
     fn test_chroot_structure_creation() {
         use std::fs;
         
-        let temp_dir = env::temp_dir().join("mini-isolate-chroot-structure-test");
+        let temp_dir = env::temp_dir().join("rustbox-chroot-structure-test");
         let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
         
         let fs_security = FilesystemSecurity::new(Some(temp_dir.clone()), temp_dir.join("work"), false);

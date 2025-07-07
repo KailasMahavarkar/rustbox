@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Simplified Core Tests for Mini-Isolate
+# Simplified Core Tests for rustbox
 # Tests basic functionality with working commands
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 
 # Colors
 GREEN='\033[0;32m'
@@ -20,7 +20,7 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-echo "===== Mini-Isolate Core Tests ====="
+echo "===== rustbox Core Tests ====="
 echo ""
 
 passed=0
@@ -151,7 +151,7 @@ echo "Success rate: $(( (passed * 100) / (passed + failed) ))%"
 echo ""
 
 if [[ $failed -eq 0 ]]; then
-    echo "✅ All core tests passed! Mini-isolate is working correctly."
+    echo "✅ All core tests passed! rustbox is working correctly."
     exit 0
 else
     echo "⚠️ Some tests failed. Check the output above for details."

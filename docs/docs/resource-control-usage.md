@@ -1,8 +1,8 @@
-# Mini-Isolate Resource Control Examples
+# rustbox Resource Control Examples
 
 ## Using the New Resource Limit Flags
 
-The mini-isolate project now supports runtime resource control via command-line flags. These flags allow you to override the resource limits configured during isolate initialization.
+The rustbox project now supports runtime resource control via command-line flags. These flags allow you to override the resource limits configured during isolate initialization.
 
 ### Available Flags
 
@@ -16,10 +16,10 @@ The mini-isolate project now supports runtime resource control via command-line 
 
 ```bash
 # Initialize an isolate with default limits
-mini-isolate init --box-id 0 --mem 128 --time 10
+rustbox init --box-id 0 --mem 128 --time 10
 
 # Run a command with overridden resource limits
-mini-isolate run --box-id 0 \
+rustbox run --box-id 0 \
     --max-cpu 30 \
     --max-memory 256 \
     --max-time 60 \
@@ -30,7 +30,7 @@ mini-isolate run --box-id 0 \
 
 ```bash
 # Execute a Python script with custom limits
-mini-isolate execute --box-id 0 \
+rustbox execute --box-id 0 \
     --source heavy_computation.py \
     --max-cpu 60 \
     --max-memory 512 \
@@ -43,12 +43,12 @@ mini-isolate execute --box-id 0 \
 
 ```bash
 # Override only memory limit (CPU and time use isolate defaults)
-mini-isolate run --box-id 0 \
+rustbox run --box-id 0 \
     --max-memory 1024 \
     "memory_intensive_program"
 
 # Override only time limits
-mini-isolate execute --box-id 0 \
+rustbox execute --box-id 0 \
     --source benchmark.cpp \
     --max-cpu 300 \
     --max-time 600
@@ -59,14 +59,14 @@ mini-isolate execute --box-id 0 \
 ```bash
 # Different limits for different problem types
 # Quick problems - strict limits
-mini-isolate run --box-id contest \
+rustbox run --box-id contest \
     --max-cpu 1 \
     --max-memory 64 \
     --max-time 2 \
     "./solution"
 
 # Complex problems - relaxed limits  
-mini-isolate run --box-id contest \
+rustbox run --box-id contest \
     --max-cpu 10 \
     --max-memory 512 \
     --max-time 20 \
@@ -79,7 +79,7 @@ mini-isolate run --box-id contest \
 # Test with increasingly strict limits
 for cpu_limit in 1 2 5 10; do
     echo "Testing with ${cpu_limit}s CPU limit..."
-    mini-isolate run --box-id test \
+    rustbox run --box-id test \
         --max-cpu $cpu_limit \
         --max-memory 128 \
         --output "result_${cpu_limit}s.json" \
@@ -99,7 +99,7 @@ The resource override flags work by:
 
 ### Compatibility
 
-- These flags are compatible with all existing mini-isolate functionality
+- These flags are compatible with all existing rustbox functionality
 - If no override flags are specified, the isolate instance's original limits apply
 - Override flags only affect the single execution, not the persistent isolate configuration
 - Flags can be used individually or in combination

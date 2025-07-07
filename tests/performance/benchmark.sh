@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Performance Tests for Mini-Isolate
+# Performance Tests for rustbox
 # Tests performance characteristics and benchmarks
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 
 # Colors
 GREEN='\033[0;32m'
@@ -22,7 +22,7 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-echo "===== Mini-Isolate Performance Tests ====="
+echo "===== rustbox Performance Tests ====="
 echo ""
 
 passed=0
@@ -185,7 +185,7 @@ echo "Success rate: $(( (passed * 100) / (passed + failed) ))%"
 echo ""
 
 if [[ $failed -eq 0 ]]; then
-    echo "✅ All performance tests passed! Mini-isolate is performing well."
+    echo "✅ All performance tests passed! rustbox is performing well."
     exit 0
 else
     echo "⚠️ Some performance tests failed. Consider optimization."

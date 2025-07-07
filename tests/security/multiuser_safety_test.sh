@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Multi-User Safety Tests for Mini-Isolate
+# Multi-User Safety Tests for rustbox
 # Tests box ID locking, user isolation, and concurrent access prevention
 # Based on isolate-reference multi-user safety requirements
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -268,7 +268,7 @@ if sudo "$MINI_ISOLATE" init --box-id "format_test" >/dev/null 2>&1; then
     lock_files_found=0
     
     # Look for lock files in common locations
-    for lock_dir in "/tmp/mini-isolate-locks" "/tmp/mini-isolate/locks" "/var/lock/mini-isolate"; do
+    for lock_dir in "/tmp/rustbox-locks" "/tmp/rustbox/locks" "/var/lock/rustbox"; do
         if [[ -d "$lock_dir" ]]; then
             lock_files=$(find "$lock_dir" -name "*format_test*" 2>/dev/null | wc -l)
             if [[ $lock_files -gt 0 ]]; then

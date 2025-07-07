@@ -1,6 +1,6 @@
 # CLI Module Documentation
 
-The `cli.rs` module provides the command-line interface for Mini-Isolate, designed to be compatible with IOI Isolate command patterns.
+The `cli.rs` module provides the command-line interface for rustbox, designed to be compatible with IOI Isolate command patterns.
 
 ## Overview
 
@@ -9,7 +9,7 @@ The CLI module implements a comprehensive command-line interface that closely fo
 ## Command Structure
 
 ```
-mini-isolate <COMMAND> [OPTIONS]
+rustbox <COMMAND> [OPTIONS]
 ```
 
 ## Commands
@@ -19,7 +19,7 @@ mini-isolate <COMMAND> [OPTIONS]
 Creates a new isolate instance with specified resource limits.
 
 ```bash
-mini-isolate init [OPTIONS]
+rustbox init [OPTIONS]
 ```
 
 #### Options
@@ -36,13 +36,13 @@ mini-isolate init [OPTIONS]
 
 ```bash
 # Basic initialization
-mini-isolate init --box-id 0
+rustbox init --box-id 0
 
 # Custom limits
-mini-isolate init --box-id contest01 --mem 256 --time 30 --processes 5
+rustbox init --box-id contest01 --mem 256 --time 30 --processes 5
 
 # Specific working directory
-mini-isolate init --box-id test --dir /tmp/my-isolate --mem 64 --time 5
+rustbox init --box-id test --dir /tmp/my-isolate --mem 64 --time 5
 ```
 
 ### `run` - Execute Command
@@ -50,7 +50,7 @@ mini-isolate init --box-id test --dir /tmp/my-isolate --mem 64 --time 5
 Runs a command or program in the specified isolate instance.
 
 ```bash
-mini-isolate run [OPTIONS] <PROGRAM> [ARGS...]
+rustbox run [OPTIONS] <PROGRAM> [ARGS...]
 ```
 
 #### Options
@@ -69,19 +69,19 @@ mini-isolate run [OPTIONS] <PROGRAM> [ARGS...]
 
 ```bash
 # Simple command execution
-mini-isolate run --box-id 0 "echo Hello World"
+rustbox run --box-id 0 "echo Hello World"
 
 # Execute with arguments
-mini-isolate run --box-id 0 "/usr/bin/python3" "-c" "print('Hello')"
+rustbox run --box-id 0 "/usr/bin/python3" "-c" "print('Hello')"
 
 # With input file
-mini-isolate run --box-id 0 --input input.txt "./my-program"
+rustbox run --box-id 0 --input input.txt "./my-program"
 
 # Save results to JSON
-mini-isolate run --box-id 0 --output result.json "./my-program"
+rustbox run --box-id 0 --output result.json "./my-program"
 
 # Verbose output
-mini-isolate run --box-id 0 --verbose "./my-program"
+rustbox run --box-id 0 --verbose "./my-program"
 ```
 
 ### `execute` - Execute Source File
@@ -89,7 +89,7 @@ mini-isolate run --box-id 0 --verbose "./my-program"
 Executes a source file directly with automatic language detection and compilation.
 
 ```bash
-mini-isolate execute [OPTIONS] --source <FILE>
+rustbox execute [OPTIONS] --source <FILE>
 ```
 
 #### Options
@@ -116,13 +116,13 @@ The system automatically detects language based on file extension:
 
 ```bash
 # Execute Python script
-mini-isolate execute --box-id 0 --source hello.py
+rustbox execute --box-id 0 --source hello.py
 
 # Execute with input
-mini-isolate execute --box-id 0 --source solution.cpp --input test.txt
+rustbox execute --box-id 0 --source solution.cpp --input test.txt
 
 # Save detailed results
-mini-isolate execute --box-id 0 --source program.c --output result.json --verbose
+rustbox execute --box-id 0 --source program.c --output result.json --verbose
 ```
 
 ### `list` - List Instances
@@ -130,15 +130,15 @@ mini-isolate execute --box-id 0 --source program.c --output result.json --verbos
 Lists all available isolate instances.
 
 ```bash
-mini-isolate list
+rustbox list
 ```
 
 #### Output
 
 ```
 Available isolate instances:
-  0 - /tmp/mini-isolate/0
-  contest01 - /tmp/mini-isolate/contest01
+  0 - /tmp/rustbox/0
+  contest01 - /tmp/rustbox/contest01
   test - /tmp/my-isolate
 ```
 
@@ -147,7 +147,7 @@ Available isolate instances:
 Removes isolate instances and cleans up resources.
 
 ```bash
-mini-isolate cleanup [OPTIONS]
+rustbox cleanup [OPTIONS]
 ```
 
 #### Options
@@ -159,10 +159,10 @@ mini-isolate cleanup [OPTIONS]
 
 ```bash
 # Clean specific instance
-mini-isolate cleanup --box-id 0
+rustbox cleanup --box-id 0
 
 # Clean all instances
-mini-isolate cleanup --all
+rustbox cleanup --all
 ```
 
 ### `info` - System Information
@@ -170,7 +170,7 @@ mini-isolate cleanup --all
 Displays system information and capabilities.
 
 ```bash
-mini-isolate info [OPTIONS]
+rustbox info [OPTIONS]
 ```
 
 #### Options
@@ -180,7 +180,7 @@ mini-isolate info [OPTIONS]
 #### Example Output
 
 ```
-Mini-Isolate System Information
+rustbox System Information
 ==============================
 Cgroups: Available
 Cgroup mount: /sys/fs/cgroup
@@ -193,7 +193,7 @@ Active instances: 2
 
 ## Exit Codes
 
-Mini-Isolate uses specific exit codes to indicate execution results:
+rustbox uses specific exit codes to indicate execution results:
 
 - **0**: Success
 - **1**: Runtime error or general failure
@@ -262,7 +262,7 @@ The CLI is built using the `clap` crate with derive macros:
 
 ```rust
 #[derive(Parser)]
-#[command(name = "mini-isolate")]
+#[command(name = "rustbox")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -305,15 +305,15 @@ The CLI interfaces with core modules:
 ```bash
 # Setup multiple isolate instances for contest
 for i in {0..9}; do
-    mini-isolate init --box-id $i --mem 256 --time 60 --processes 10
+    rustbox init --box-id $i --mem 256 --time 60 --processes 10
 done
 
 # Execute solutions
-mini-isolate execute --box-id 0 --source solution1.cpp --input test1.txt
-mini-isolate execute --box-id 1 --source solution2.py --input test2.txt
+rustbox execute --box-id 0 --source solution1.cpp --input test1.txt
+rustbox execute --box-id 1 --source solution2.py --input test2.txt
 
 # Cleanup after contest
-mini-isolate cleanup --all
+rustbox cleanup --all
 ```
 
 ### Automated Testing
@@ -322,11 +322,11 @@ mini-isolate cleanup --all
 #!/bin/bash
 # Test script with JSON output
 
-mini-isolate init --box-id test --mem 128 --time 10
+rustbox init --box-id test --mem 128 --time 10
 
 for test_file in tests/*.txt; do
     result_file="results/$(basename "$test_file" .txt).json"
-    mini-isolate execute --box-id test --source program.cpp \
+    rustbox execute --box-id test --source program.cpp \
         --input "$test_file" --output "$result_file"
     
     # Check if successful
@@ -337,28 +337,28 @@ for test_file in tests/*.txt; do
     fi
 done
 
-mini-isolate cleanup --box-id test
+rustbox cleanup --box-id test
 ```
 
 ### Development Workflow
 
 ```bash
 # Development cycle
-mini-isolate init --box-id dev --mem 512 --time 30
+rustbox init --box-id dev --mem 512 --time 30
 
 # Test during development
-mini-isolate execute --box-id dev --source main.rs --verbose
+rustbox execute --box-id dev --source main.rs --verbose
 
 # Quick execution
-mini-isolate run --box-id dev "./target/release/my-program"
+rustbox run --box-id dev "./target/release/my-program"
 
 # Cleanup
-mini-isolate cleanup --box-id dev
+rustbox cleanup --box-id dev
 ```
 
 ## Comparison with IOI Isolate
 
-| Feature | IOI Isolate | Mini-Isolate |
+| Feature | IOI Isolate | rustbox |
 |---------|-------------|--------------|
 | Box ID | `--box-id` | `--box-id` |
 | Memory Limit | `--mem` | `--mem` |

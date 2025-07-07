@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Simple Resource Test for Mini-Isolate
+# Simple Resource Test for rustbox
 # Tests basic resource limit enforcement
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 
 if [[ $EUID -ne 0 ]]; then
     echo "❌ This script requires sudo privileges"

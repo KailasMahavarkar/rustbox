@@ -1,4 +1,4 @@
-/// Mini-Isolate: Secure Process Isolation and Resource Control System
+/// rustbox: Secure Process Isolation and Resource Control System
 /// 
 /// A modern, Rust-based implementation inspired by IOI Isolate, designed for secure
 /// execution of untrusted code with comprehensive resource limits and namespace isolation.
@@ -17,9 +17,9 @@
 /// 
 /// # Usage
 /// ```bash
-/// mini-isolate init --box-id 0
-/// mini-isolate run --box-id 0 --mem 128 --time 10 /usr/bin/python3 solution.py
-/// mini-isolate cleanup --box-id 0
+/// rustbox init --box-id 0
+/// rustbox run --box-id 0 --mem 128 --time 10 /usr/bin/python3 solution.py
+/// rustbox cleanup --box-id 0
 /// ```
 use anyhow::Result;
 
@@ -41,14 +41,14 @@ fn main() -> Result<()> {
 
     // Platform compatibility check - Unix-only for security features
     if !cfg!(unix) {
-        eprintln!("Error: mini-isolate requires Unix-like systems for security features");
+        eprintln!("Error: rustbox requires Unix-like systems for security features");
         eprintln!("Current platform does not support necessary isolation mechanisms");
         std::process::exit(1);
     }
     
     // Privilege check - many security features require elevated permissions
     if unsafe { libc::getuid() } != 0 {
-        eprintln!("Warning: mini-isolate may require root privileges for full functionality");
+        eprintln!("Warning: rustbox may require root privileges for full functionality");
         eprintln!("Running without root may limit:");
         eprintln!("  • Cgroups resource enforcement");
         eprintln!("  • Namespace isolation capabilities");

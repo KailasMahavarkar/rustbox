@@ -1,7 +1,7 @@
 # main.rs - Application Entry Point
 
 ## Overview
-The main entry point for the Mini-Isolate application. This file contains the primary executable logic that initializes the system, performs platform and permission checks, and launches the CLI interface.
+The main entry point for the rustbox application. This file contains the primary executable logic that initializes the system, performs platform and permission checks, and launches the CLI interface.
 
 ## File Location
 `src/main.rs`

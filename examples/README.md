@@ -1,13 +1,13 @@
-# Mini-Isolate Examples
+# rustbox Examples
 
-This directory contains demonstration scripts and examples showing how to use mini-isolate's security features.
+This directory contains demonstration scripts and examples showing how to use rustbox's security features.
 
 **Important:** Most demonstrations require sudo privileges to access full security features like cgroups, namespaces, and filesystem isolation.
 
 ## Demo Scripts
 
 ### 1. `demo_filesystem_security.sh`
-Demonstrates the filesystem security features of mini-isolate:
+Demonstrates the filesystem security features of rustbox:
 - Chroot jail isolation
 - Mount security flags (noexec, nosuid, nodev)
 - Essential device file creation
@@ -16,7 +16,7 @@ Demonstrates the filesystem security features of mini-isolate:
 
 **Usage:**
 ```bash
-# Make sure mini-isolate is built first
+# Make sure rustbox is built first
 cargo build --release
 
 # Run the filesystem security demonstration (requires sudo)
@@ -46,9 +46,9 @@ Python example demonstrating I/O handling and security features:
 
 **Usage:**
 ```bash
-# Run with mini-isolate
+# Run with rustbox
 cargo build --release
-./target/release/mini-isolate run --box-id test --strict --max-time 30 python3 examples/io_demo.py
+./target/release/rustbox run --box-id test --strict --max-time 30 python3 examples/io_demo.py
 ```
 
 ## Security Features Demonstrated
@@ -99,7 +99,7 @@ cargo build --release
 sudo ./examples/demo_namespace_isolation.sh
 
 # Run I/O demo
-./target/release/mini-isolate run --box-id io-test --strict --max-time 30 python3 examples/io_demo.py
+./target/release/rustbox run --box-id io-test --strict --max-time 30 python3 examples/io_demo.py
 ```
 
 ## Understanding the Output
@@ -134,7 +134,7 @@ unshare --help
 
 ## Security Notes
 
-These demos are designed to be safe for demonstration purposes, but they showcase powerful isolation features. When using mini-isolate in production:
+These demos are designed to be safe for demonstration purposes, but they showcase powerful isolation features. When using rustbox in production:
 
 - Always run with appropriate resource limits
 - Use the strictest security settings appropriate for your use case

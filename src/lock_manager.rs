@@ -1,4 +1,4 @@
-/// Enhanced multi-user lock management for mini-isolate
+/// Enhanced multi-user lock management for rustbox
 /// Based on isolate-reference lock file format for compatibility
 
 use crate::types::{IsolateError, Result};
@@ -22,7 +22,7 @@ pub struct LockRecord {
 }
 
 /// Default lock directory (can be configured)
-const DEFAULT_LOCK_ROOT: &str = "/tmp/mini-isolate-locks";
+const DEFAULT_LOCK_ROOT: &str = "/tmp/rustbox-locks";
 
 /// Magic number for lock files (same as isolate-reference)
 const LOCK_MAGIC: u32 = 0x48736f6c;
@@ -321,7 +321,7 @@ mod tests {
         lock2.acquire_lock(true).unwrap();
         lock3.acquire_lock(true).unwrap();
 
-        let boxes = BoxLockManager::list_active_boxes(Some(temp_dir.path())).unwrap();
+        let boxes = BoxLockManager::list_active_boxes(Some(&temp_dir.path().to_path_buf())).unwrap();
         assert_eq!(boxes, vec![5, 10, 20]); // Should be sorted
     }
 

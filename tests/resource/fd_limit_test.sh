@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# File Descriptor Limit Test for Mini-Isolate
+# File Descriptor Limit Test for rustbox
 # Tests file descriptor limit enforcement as part of resource limits
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 
 if [[ $EUID -ne 0 ]]; then
     echo "❌ This script requires sudo privileges"

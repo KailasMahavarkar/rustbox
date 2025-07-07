@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Integration Tests for Mini-Isolate
+# Integration Tests for rustbox
 # Tests complex end-to-end scenarios
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 
 # Colors
 GREEN='\033[0;32m'
@@ -22,7 +22,7 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-echo "===== Mini-Isolate Integration Tests ====="
+echo "===== rustbox Integration Tests ====="
 echo ""
 
 passed=0

@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Filesystem Security Demonstration for mini-isolate
+# Filesystem Security Demonstration for rustbox
 # This script demonstrates the filesystem security features implemented
 
-echo "=== Mini-Isolate Filesystem Security Demonstration ==="
+echo "=== rustbox Filesystem Security Demonstration ==="
 echo
 
 # Build from parent directory if needed
-if [ ! -f "../target/release/mini-isolate" ]; then
-    echo "Building mini-isolate..."
+if [ ! -f "../target/release/rustbox" ]; then
+    echo "Building rustbox..."
     # Preserve user environment for cargo
     if [ "$EUID" -eq 0 ]; then
         # Running as root, need to use original user's cargo
@@ -25,7 +25,7 @@ fi
 
 # Test 1: Show that the chroot option is available in CLI
 echo "1. Checking CLI chroot option availability:"
-../target/release/mini-isolate run --help | grep -A 2 "chroot"
+../target/release/rustbox run --help | grep -A 2 "chroot"
 echo
 
 # Test 2: Run filesystem security tests

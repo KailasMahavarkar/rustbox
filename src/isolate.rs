@@ -26,7 +26,7 @@ struct LockRecord {
     is_initialized: bool,
 }
 
-const LOCK_PREFIX: &str = "mini-isolate-lock";
+const LOCK_PREFIX: &str = "rustbox-lock";
 
 /// Persistent isolate instance configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -47,7 +47,7 @@ impl Isolate {
     /// Create a new isolate instance
     pub fn new(config: IsolateConfig) -> Result<Self> {
         let mut base_path = std::env::temp_dir();
-        base_path.push("mini-isolate");
+        base_path.push("rustbox");
         base_path.push(&config.instance_id);
 
         // Create base directory
@@ -74,7 +74,7 @@ impl Isolate {
     /// Load an existing isolate instance
     pub fn load(instance_id: &str) -> Result<Option<Self>> {
         let mut config_file = std::env::temp_dir();
-        config_file.push("mini-isolate");
+        config_file.push("rustbox");
         config_file.push("instances.json");
 
         if !config_file.exists() {
@@ -84,7 +84,7 @@ impl Isolate {
         let instances = Self::load_all_instances()?;
         if let Some(instance) = instances.get(instance_id) {
             let mut base_path = std::env::temp_dir();
-            base_path.push("mini-isolate");
+            base_path.push("rustbox");
             base_path.push(instance_id);
 
             if base_path.exists() {
@@ -323,7 +323,7 @@ impl Isolate {
 
         // Remove lock file
         let lock_path = std::env::temp_dir()
-            .join("mini-isolate")
+            .join("rustbox")
             .join("locks")
             .join(&instance_id);
         if lock_path.exists() {
@@ -351,7 +351,7 @@ impl Isolate {
     /// Load all instances from storage
     fn load_all_instances() -> Result<HashMap<String, IsolateInstance>> {
         let mut config_file = std::env::temp_dir();
-        config_file.push("mini-isolate");
+        config_file.push("rustbox");
 
         // Create directory if it doesn't exist
         if !config_file.exists() {
@@ -377,7 +377,7 @@ impl Isolate {
 
     /// Acquire exclusive lock for this isolate instance (based on isolate-reference)
     fn acquire_lock(&mut self, is_init: bool) -> Result<()> {
-        let lock_dir = std::env::temp_dir().join("mini-isolate").join("locks");
+        let lock_dir = std::env::temp_dir().join("rustbox").join("locks");
         fs::create_dir_all(&lock_dir)?;
 
         let lock_path = lock_dir.join(&self.instance.config.instance_id);
@@ -475,7 +475,7 @@ impl Isolate {
     where
         F: FnOnce(&mut HashMap<String, IsolateInstance>),
     {
-        let instances_dir = std::env::temp_dir().join("mini-isolate");
+        let instances_dir = std::env::temp_dir().join("rustbox");
         fs::create_dir_all(&instances_dir)?;
 
         let instances_file = instances_dir.join("instances.json");

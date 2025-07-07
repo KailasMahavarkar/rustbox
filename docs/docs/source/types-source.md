@@ -1,7 +1,7 @@
 # types.rs - Core Types and Data Structures
 
 ## Overview
-Contains all fundamental data structures, enums, and type definitions used throughout the Mini-Isolate system. This module defines the core configuration, execution results, error handling, and resource management types.
+Contains all fundamental data structures, enums, and type definitions used throughout the rustbox system. This module defines the core configuration, execution results, error handling, and resource management types.
 
 ## File Location
 `src/types.rs`
@@ -56,7 +56,7 @@ Default configuration implementation providing sensible defaults for process iso
 - **Process Limit**: 1 process
 - **File Size Limit**: 64MB
 - **Network**: Disabled by default
-- **Working Directory**: `/tmp/mini-isolate/{uuid}`
+- **Working Directory**: `/tmp/rustbox/{uuid}`
 - **Strict Mode**: Disabled
 
 ### `struct ExecutionResult`

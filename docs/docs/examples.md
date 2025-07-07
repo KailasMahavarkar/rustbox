@@ -1,6 +1,6 @@
 # Examples and Usage Guide
 
-This document provides practical examples of using Mini-Isolate in various scenarios.
+This document provides practical examples of using rustbox in various scenarios.
 
 ## Basic Usage Examples
 
@@ -8,17 +8,17 @@ This document provides practical examples of using Mini-Isolate in various scena
 
 #### Initialize an isolate
 ```bash
-mini-isolate init --box-id 0 --mem 128 --time 10
+rustbox init --box-id 0 --mem 128 --time 10
 ```
 
 #### Run a simple command
 ```bash
-mini-isolate run --box-id 0 "/bin/echo" -- "Hello World"
+rustbox run --box-id 0 "/bin/echo" -- "Hello World"
 ```
 
 #### Run with verbose output
 ```bash
-mini-isolate run --box-id 0 --verbose "/usr/bin/python3" -- "-c" "print('Hello from Python')"
+rustbox run --box-id 0 --verbose "/usr/bin/python3" -- "-c" "print('Hello from Python')"
 ```
 
 ### 2. Source File Execution
@@ -29,7 +29,7 @@ mini-isolate run --box-id 0 --verbose "/usr/bin/python3" -- "-c" "print('Hello f
 echo 'print("Hello from Python script")' > hello.py
 
 # Execute it
-mini-isolate execute --box-id 0 --source hello.py --verbose
+rustbox execute --box-id 0 --source hello.py --verbose
 ```
 
 #### Execute C program
@@ -44,7 +44,7 @@ int main() {
 EOF
 
 # Execute it (automatically compiles and runs)
-mini-isolate execute --box-id 0 --source hello.c --verbose
+rustbox execute --box-id 0 --source hello.c --verbose
 ```
 
 #### Execute with input file
@@ -59,14 +59,14 @@ print(f"Sum: {a + b}")
 EOF
 
 # Execute with input
-mini-isolate execute --box-id 0 --source sum.py --input input.txt --verbose
+rustbox execute --box-id 0 --source sum.py --input input.txt --verbose
 ```
 
 ### 3. JSON Output and Automation
 
 ```bash
 # Run with JSON output
-mini-isolate execute --box-id 0 --source hello.py --output result.json
+rustbox execute --box-id 0 --source hello.py --output result.json
 
 # Check the result
 cat result.json
@@ -92,7 +92,7 @@ Example JSON output:
 
 #### Set strict memory limit
 ```bash
-mini-isolate init --box-id strict --mem 32 --time 5 --processes 1
+rustbox init --box-id strict --mem 32 --time 5 --processes 1
 ```
 
 #### Test memory limit with a program
@@ -104,14 +104,14 @@ print("Memory allocated successfully")
 EOF
 
 # This should trigger memory limit (when running with root privileges)
-mini-isolate execute --box-id strict --source memory_test.py --verbose
+rustbox execute --box-id strict --source memory_test.py --verbose
 ```
 
 ### 5. Time Limits
 
 #### Set short time limit
 ```bash
-mini-isolate init --box-id quick --time 1 --wall-time 2
+rustbox init --box-id quick --time 1 --wall-time 2
 ```
 
 #### Test with infinite loop
@@ -127,7 +127,7 @@ while True:
 EOF
 
 # This should be killed due to time limit
-mini-isolate execute --box-id quick --source infinite.py --verbose
+rustbox execute --box-id quick --source infinite.py --verbose
 ```
 
 ## Programming Contest Usage
@@ -140,7 +140,7 @@ mini-isolate execute --box-id quick --source infinite.py --verbose
 
 # Initialize isolate instances for multiple contestants
 for i in {0..9}; do
-    mini-isolate init --box-id $i --mem 256 --time 30 --wall-time 60 --processes 5 --fsize 128
+    rustbox init --box-id $i --mem 256 --time 30 --wall-time 60 --processes 5 --fsize 128
 done
 
 echo "Contest environment ready with 10 isolate instances"
@@ -171,7 +171,7 @@ for test_case in "$PROBLEM_DIR"/test*.txt; do
     echo "Running test case: $test_name"
     
     # Run the solution
-    mini-isolate execute --box-id "$BOX_ID" --source "$SOLUTION_FILE" \
+    rustbox execute --box-id "$BOX_ID" --source "$SOLUTION_FILE" \
         --input "$test_case" --output "result_${test_name}.json"
     
     exit_code=$?
@@ -238,7 +238,7 @@ done
 # Educational environment setup
 
 # Create a teaching environment
-mini-isolate init --box-id classroom --mem 128 --time 10 --processes 3 --fsize 64
+rustbox init --box-id classroom --mem 128 --time 10 --processes 3 --fsize 64
 
 # Function to run student code safely
 run_student_code() {
@@ -247,7 +247,7 @@ run_student_code() {
     
     echo "Running code from $student_name..."
     
-    mini-isolate execute --box-id classroom --source "$student_file" \
+    rustbox execute --box-id classroom --source "$student_file" \
         --output "${student_name}_result.json" --verbose
     
     # Extract and show results
@@ -280,14 +280,14 @@ run_student_code student1.py "Alice"
 DEV_BOX="dev"
 
 # Initialize development environment
-mini-isolate init --box-id $DEV_BOX --mem 512 --time 30
+rustbox init --box-id $DEV_BOX --mem 512 --time 30
 
 # Function to test current code
 test_code() {
     local source_file="$1"
     
     echo "Testing $source_file..."
-    mini-isolate execute --box-id $DEV_BOX --source "$source_file" \
+    rustbox execute --box-id $DEV_BOX --source "$source_file" \
         --verbose --output test_result.json
     
     # Show summary
@@ -306,7 +306,7 @@ perf_test() {
     echo "Performance testing $source_file with $input_file..."
     
     for i in {1..5}; do
-        mini-isolate execute --box-id $DEV_BOX --source "$source_file" \
+        rustbox execute --box-id $DEV_BOX --source "$source_file" \
             --input "$input_file" --output "perf_$i.json" >/dev/null
         
         time=$(python3 -c "
@@ -334,7 +334,7 @@ test_code test_program.py
 # Security testing environment
 
 # Create highly restricted environment
-mini-isolate init --box-id sandbox --mem 64 --time 5 --wall-time 10 --processes 1 --fsize 32
+rustbox init --box-id sandbox --mem 64 --time 5 --wall-time 10 --processes 1 --fsize 32
 
 # Test potentially dangerous code safely
 test_dangerous_code() {
@@ -368,7 +368,7 @@ except:
 EOF
 
     echo "Testing potentially malicious code..."
-    mini-isolate execute --box-id sandbox --source dangerous.py --verbose
+    rustbox execute --box-id sandbox --source dangerous.py --verbose
 }
 
 test_dangerous_code
@@ -383,11 +383,11 @@ test_dangerous_code
 # Cleanup script
 
 # Clean specific instances
-mini-isolate cleanup --box-id test
-mini-isolate cleanup --box-id dev
+rustbox cleanup --box-id test
+rustbox cleanup --box-id dev
 
 # Clean all instances
-mini-isolate cleanup --all
+rustbox cleanup --all
 
 # System cleanup
 echo "Cleaning temporary files..."
@@ -398,13 +398,13 @@ rm -f *.json *.py *.c *.cpp *.out result_*
 
 ```bash
 #!/bin/bash
-# Monitor Mini-Isolate usage
+# Monitor rustbox usage
 
-echo "=== Mini-Isolate System Status ==="
-mini-isolate info --cgroups
+echo "=== rustbox System Status ==="
+rustbox info --cgroups
 
 echo -e "\n=== Active Instances ==="
-mini-isolate list
+rustbox list
 
 echo -e "\n=== System Resources ==="
 df -h /tmp | grep -E "(Filesystem|tmpfs)"

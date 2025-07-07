@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Mini-Isolate Comprehensive Test Runner
+# rustbox Comprehensive Test Runner
 # Uses the organized test directory structure with category-based testing
 
 set -e
@@ -45,7 +45,7 @@ log_warning() {
 
 show_help() {
     cat << EOF
-${BOLD}Mini-Isolate Comprehensive Test Runner${NC}
+${BOLD}rustbox Comprehensive Test Runner${NC}
 
 ${BOLD}USAGE:${NC}
     $0 [OPTIONS] [CATEGORY] [TEST_NAME]
@@ -54,7 +54,7 @@ ${BOLD}OPTIONS:${NC}
     -h, --help              Show this help message
     -v, --verbose           Enable verbose output
     -s, --sudo              Run tests requiring sudo privileges
-    --build                 Build mini-isolate before running tests
+    --build                 Build rustbox before running tests
 
 ${BOLD}TEST CATEGORIES:${NC}
     core                    Basic functionality validation
@@ -71,7 +71,7 @@ ${BOLD}EXAMPLES:${NC}
     $0 core                 # Run only core functionality tests
     $0 security isolation   # Run specific isolation test in security category
     $0 -v stress parallel   # Run parallel stress test with verbose output
-    $0 --build all          # Build mini-isolate then run all tests
+    $0 --build all          # Build rustbox then run all tests
 
 ${BOLD}NOTES:${NC}
     - Most tests require sudo privileges for namespace and cgroup operations
@@ -84,14 +84,14 @@ EOF
 check_dependencies() {
     log_info "Checking dependencies..."
     
-    # Check if mini-isolate binary exists
-    local binary_path="$SCRIPT_DIR/target/release/mini-isolate"
+    # Check if rustbox binary exists
+    local binary_path="$SCRIPT_DIR/target/release/rustbox"
     if [ ! -f "$binary_path" ]; then
-        log_warning "Mini-isolate binary not found at $binary_path"
+        log_warning "rustbox binary not found at $binary_path"
         
         # Check if cargo is available for building
         if command -v cargo &> /dev/null; then
-            log_info "Building mini-isolate (release)..."
+            log_info "Building rustbox (release)..."
             if cargo build --release; then
                 log_success "Build completed successfully"
             else
@@ -99,12 +99,12 @@ check_dependencies() {
                 return 1
             fi
         else
-            log_failure "Mini-isolate binary not found and cargo not available"
-            log_info "Please build mini-isolate first: cargo build --release"
+            log_failure "rustbox binary not found and cargo not available"
+            log_info "Please build rustbox first: cargo build --release"
             return 1
         fi
     else
-        log_success "Mini-isolate binary found"
+        log_success "rustbox binary found"
     fi
     
     # Check if tests directory exists and contains test categories
@@ -203,7 +203,7 @@ run_quick_validation() {
         for test_file in "$core_dir"/*.sh; do
             if [[ -f "$test_file" && $(basename "$test_file") == "basic_execution.sh" ]]; then
                 if sudo bash "$test_file" >/dev/null 2>&1; then
-                    log_success "Quick validation passed - mini-isolate is functional"
+                    log_success "Quick validation passed - rustbox is functional"
                     return 0
                 else
                     log_failure "Quick validation failed - basic functionality not working"
@@ -246,7 +246,7 @@ run_all_tests() {
     
     if [ ${#failed_categories[@]} -eq 0 ]; then
         echo -e "\n${BOLD}${GREEN}🎉 ALL TEST CATEGORIES PASSED!${NC}"
-        echo -e "${GREEN}Mini-isolate is working correctly across all functionality${NC}"
+        echo -e "${GREEN}rustbox is working correctly across all functionality${NC}"
         return 0
     else
         echo -e "\n${BOLD}${RED}❌ ${#failed_categories[@]} CATEGORIES FAILED:${NC}"
@@ -312,7 +312,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --build)
-            log_info "Building mini-isolate..."
+            log_info "Building rustbox..."
             if cargo build --release; then
                 log_success "Build completed"
             else
@@ -340,7 +340,7 @@ done
 
 # Main execution
 main() {
-    log_header "MINI-ISOLATE TEST RUNNER"
+    log_header "rustbox TEST RUNNER"
     
     # Check dependencies first
     check_dependencies || exit 1

@@ -1,28 +1,28 @@
 # IOI Isolate Compatibility Guide
 
-This document explains the compatibility between Mini-Isolate and the original IOI isolate sandbox, highlighting similarities, differences, and migration strategies.
+This document explains the compatibility between rustbox and the original IOI isolate sandbox, highlighting similarities, differences, and migration strategies.
 
 ## Overview
 
-Mini-Isolate is designed to be largely compatible with the IOI isolate sandbox used in programming contests. It provides similar functionality with some differences in implementation and features.
+rustbox is designed to be largely compatible with the IOI isolate sandbox used in programming contests. It provides similar functionality with some differences in implementation and features.
 
 ## Command-Line Interface Compatibility
 
 ### Supported Commands
 
-| IOI Isolate | Mini-Isolate | Compatibility | Notes |
+| IOI Isolate | rustbox | Compatibility | Notes |
 |-------------|--------------|---------------|-------|
-| `isolate --init` | `mini-isolate init` | ✓ Full | Same functionality |
-| `isolate --run` | `mini-isolate run` | ✓ Full | Same behavior |
-| `isolate --cleanup` | `mini-isolate cleanup` | ✓ Full | Same cleanup process |
-| `isolate --version` | `mini-isolate version` | ✓ Full | Shows version info |
-| N/A | `mini-isolate execute` | ➕ Extra | Source file execution |
-| N/A | `mini-isolate list` | ➕ Extra | List active instances |
-| N/A | `mini-isolate info` | ➕ Extra | System information |
+| `isolate --init` | `rustbox init` | ✓ Full | Same functionality |
+| `isolate --run` | `rustbox run` | ✓ Full | Same behavior |
+| `isolate --cleanup` | `rustbox cleanup` | ✓ Full | Same cleanup process |
+| `isolate --version` | `rustbox version` | ✓ Full | Shows version info |
+| N/A | `rustbox execute` | ➕ Extra | Source file execution |
+| N/A | `rustbox list` | ➕ Extra | List active instances |
+| N/A | `rustbox info` | ➕ Extra | System information |
 
 ### Parameter Compatibility
 
-| IOI Isolate Option | Mini-Isolate Option | Compatibility | Notes |
+| IOI Isolate Option | rustbox Option | Compatibility | Notes |
 |-------------------|-------------------|---------------|-------|
 | `--box-id=ID` | `--box-id ID` | ✓ Full | Same functionality |
 | `--mem=SIZE` | `--mem SIZE` | ✓ Full | Memory limit in MB |
@@ -38,9 +38,9 @@ Mini-Isolate is designed to be largely compatible with the IOI isolate sandbox u
 
 ## Exit Code Compatibility
 
-Mini-Isolate follows the same exit code conventions as IOI isolate:
+rustbox follows the same exit code conventions as IOI isolate:
 
-| Exit Code | Meaning | IOI Isolate | Mini-Isolate |
+| Exit Code | Meaning | IOI Isolate | rustbox |
 |-----------|---------|-------------|--------------|
 | 0 | Success | ✓ | ✓ |
 | 1 | Runtime Error | ✓ | ✓ |
@@ -62,11 +62,11 @@ isolate --run --box-id=0 --mem=128 --time=10 -- /usr/bin/python3 solution.py
 isolate --cleanup --box-id=0
 ```
 
-#### Mini-Isolate
+#### rustbox
 ```bash
-mini-isolate init --box-id 0 --mem 128 --time 10
-mini-isolate run --box-id 0 "/usr/bin/python3" -- "solution.py"
-mini-isolate cleanup --box-id 0
+rustbox init --box-id 0 --mem 128 --time 10
+rustbox run --box-id 0 "/usr/bin/python3" -- "solution.py"
+rustbox cleanup --box-id 0
 ```
 
 ### Contest Judge System Migration
@@ -98,7 +98,7 @@ isolate --cleanup --box-id="$BOX_ID"
 exit $RESULT
 ```
 
-#### Mini-Isolate Migration
+#### rustbox Migration
 ```bash
 #!/bin/bash
 # Migrated judge script
@@ -108,11 +108,11 @@ SOLUTION="$2"
 INPUT="$3"
 OUTPUT="$4"
 
-mini-isolate cleanup --box-id "$BOX_ID" >/dev/null 2>&1
-mini-isolate init --box-id "$BOX_ID" --mem 256 --time 10 --wall-time 20
+rustbox cleanup --box-id "$BOX_ID" >/dev/null 2>&1
+rustbox init --box-id "$BOX_ID" --mem 256 --time 10 --wall-time 20
 
 # Execute with input/output redirection
-mini-isolate execute --box-id "$BOX_ID" --source "$SOLUTION" \
+rustbox execute --box-id "$BOX_ID" --source "$SOLUTION" \
     --input "$INPUT" --output result.json
 
 RESULT=$?
@@ -127,7 +127,7 @@ with open('result.json', 'r') as f:
 " > "$OUTPUT"
 fi
 
-mini-isolate cleanup --box-id "$BOX_ID"
+rustbox cleanup --box-id "$BOX_ID"
 exit $RESULT
 ```
 
@@ -156,11 +156,11 @@ judge_submission() {
 }
 ```
 
-##### Mini-Isolate Version
+##### rustbox Version
 ```bash
 # Setup multiple boxes for parallel judging  
 for i in {0..9}; do
-    mini-isolate init --box-id $i --mem 512 --time 30 --wall-time 60
+    rustbox init --box-id $i --mem 512 --time 30 --wall-time 60
 done
 
 # Judge a submission
@@ -168,7 +168,7 @@ judge_submission() {
     local box_id="$1"
     local submission="$2"
     
-    mini-isolate execute --box-id "$box_id" --source "$submission" \
+    rustbox execute --box-id "$box_id" --source "$submission" \
         --output "result_${box_id}.json"
     
     # Parse JSON for detailed results
@@ -185,22 +185,22 @@ with open('result_${box_id}.json', 'r') as f:
 ## Key Differences and Enhancements
 
 ### 1. Source File Execution
-Mini-Isolate introduces the `execute` command for direct source file execution:
+rustbox introduces the `execute` command for direct source file execution:
 
 ```bash
 # IOI Isolate (requires manual compilation)
 gcc solution.c -o solution
 isolate --run --box-id=0 -- ./solution
 
-# Mini-Isolate (automatic compilation)
-mini-isolate execute --box-id 0 --source solution.c
+# rustbox (automatic compilation)
+rustbox execute --box-id 0 --source solution.c
 ```
 
 ### 2. JSON Output Format
-Mini-Isolate provides structured JSON output for easier automation:
+rustbox provides structured JSON output for easier automation:
 
 ```bash
-mini-isolate execute --box-id 0 --source solution.py --output result.json
+rustbox execute --box-id 0 --source solution.py --output result.json
 ```
 
 Result format:
@@ -220,18 +220,18 @@ Result format:
 ```
 
 ### 3. System Information Commands
-Mini-Isolate provides additional system information:
+rustbox provides additional system information:
 
 ```bash
-mini-isolate info --cgroups    # Check cgroup support
-mini-isolate list             # List active instances
+rustbox info --cgroups    # Check cgroup support
+rustbox list             # List active instances
 ```
 
 ### 4. Enhanced Error Messages
-Mini-Isolate provides more descriptive error messages and warnings:
+rustbox provides more descriptive error messages and warnings:
 
 ```
-Warning: mini-isolate may require root privileges for full functionality
+Warning: rustbox may require root privileges for full functionality
 Some features like cgroups may not work without proper permissions
 Warning: Cannot create cgroup (permission denied). Resource limits will not be enforced.
 ```
@@ -241,7 +241,7 @@ Warning: Cannot create cgroup (permission denied). Resource limits will not be e
 ### Test Script for Migration Validation
 ```bash
 #!/bin/bash
-# Test compatibility between IOI isolate and Mini-Isolate
+# Test compatibility between IOI isolate and rustbox
 
 echo "=== Compatibility Test Suite ==="
 
@@ -259,10 +259,10 @@ if command -v isolate >/dev/null; then
     isolate --cleanup --box-id=99
 fi
 
-echo "Mini-isolate test:"
-mini-isolate init --box-id 99 --mem 128 --time 10
-mini-isolate execute --box-id 99 --source test_basic.py
-mini-isolate cleanup --box-id 99
+echo "rustbox test:"
+rustbox init --box-id 99 --mem 128 --time 10
+rustbox execute --box-id 99 --source test_basic.py
+rustbox cleanup --box-id 99
 
 # Test 2: Time limit
 echo -e "\nTesting time limits..."
@@ -272,10 +272,10 @@ time.sleep(10)  # Should be killed before this completes
 print("Should not print")
 EOF
 
-mini-isolate init --box-id 98 --time 1
-mini-isolate execute --box-id 98 --source test_timeout.py
+rustbox init --box-id 98 --time 1
+rustbox execute --box-id 98 --source test_timeout.py
 echo "Exit code: $?"  # Should be 2 (timeout)
-mini-isolate cleanup --box-id 98
+rustbox cleanup --box-id 98
 
 # Cleanup
 rm -f test_*.py
@@ -283,7 +283,7 @@ rm -f test_*.py
 
 ## Migration Checklist
 
-When migrating from IOI isolate to Mini-Isolate:
+When migrating from IOI isolate to rustbox:
 
 - [ ] **Command syntax**: Update command-line syntax (dashes vs spaces)
 - [ ] **Output parsing**: Switch to JSON output format if needed
@@ -314,4 +314,4 @@ Planned features to improve IOI isolate compatibility:
 - **Issues**: Report compatibility issues on the project repository
 - **Contact**: For migration assistance and questions
 
-This compatibility guide ensures smooth transition from IOI isolate to Mini-Isolate while highlighting the enhanced features and capabilities of the new system.
+This compatibility guide ensures smooth transition from IOI isolate to rustbox while highlighting the enhanced features and capabilities of the new system.

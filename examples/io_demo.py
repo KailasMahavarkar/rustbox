@@ -3,7 +3,7 @@
 Code Sandbox I/O Demonstration Script
 
 This script demonstrates the advanced I/O capabilities implemented for the 
-mini-isolate code sandbox executor.
+rustbox code sandbox executor.
 """
 
 import sys

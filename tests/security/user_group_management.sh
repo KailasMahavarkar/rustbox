@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Test User/Group Management (--as-uid, --as-gid) Features
-# Part of mini-isolate security test suite
+# Part of rustbox security test suite
 
 set -e
 
@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 # Configuration
 SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-MINI_ISOLATE="$PROJECT_ROOT/target/release/mini-isolate"
+MINI_ISOLATE="$PROJECT_ROOT/target/release/rustbox"
 TEST_PREFIX="uid_gid_test"
 
 # Test helper functions
@@ -203,7 +203,7 @@ EOF
     
     # Copy script to isolate directory  
     local workdir
-    workdir=$(/bin/ls -d /tmp/mini-isolate/"$test_box" 2>/dev/null || echo "/tmp/mini-isolate-workdir")
+    workdir=$(/bin/ls -d /tmp/rustbox/"$test_box" 2>/dev/null || echo "/tmp/rustbox-workdir")
     sudo cp "$test_script" "$workdir/test_script.sh" 2>/dev/null || true
     sudo chmod +x "$workdir/test_script.sh" 2>/dev/null || true
     
@@ -261,14 +261,14 @@ main() {
     
     log_info "Running as root: OK"
     
-    # Check if mini-isolate binary exists
+    # Check if rustbox binary exists
     if [[ ! -f "$MINI_ISOLATE" ]]; then
-        log_failure "Mini-isolate binary not found at $MINI_ISOLATE"
+        log_failure "rustbox binary not found at $MINI_ISOLATE"
         log_info "Please run 'cargo build --release' first"
         exit 1
     fi
     
-    log_info "Mini-isolate binary found: OK"
+    log_info "rustbox binary found: OK"
     
     local tests_passed=0
     local total_tests=0

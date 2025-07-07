@@ -1,7 +1,7 @@
 # cli.rs - Command Line Interface Implementation
 
 ## Overview
-Comprehensive command-line interface for the Mini-Isolate system, providing user-friendly access to all isolation and execution functionality. Implements argument parsing, command handling, and result presentation.
+Comprehensive command-line interface for the rustbox system, providing user-friendly access to all isolation and execution functionality. Implements argument parsing, command handling, and result presentation.
 
 ## File Location
 `src/cli.rs`
@@ -30,7 +30,7 @@ Main CLI structure using clap's derive interface for argument parsing.
 - **`command: Commands`** - The subcommand to execute
 
 #### Attributes
-- `#[command(name = "mini-isolate")]` - Sets the program name
+- `#[command(name = "rustbox")]` - Sets the program name
 - `#[command(about = "...")]` - Provides help text description
 
 ### `enum Commands`

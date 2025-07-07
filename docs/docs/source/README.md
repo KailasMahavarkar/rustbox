@@ -1,7 +1,7 @@
-# Mini-Isolate Source Code Documentation
+# rustbox Source Code Documentation
 
 ## Overview
-This directory contains comprehensive technical documentation for each source file in the Mini-Isolate project. Each markdown file provides detailed explanations of the code structure, functions, and implementation details.
+This directory contains comprehensive technical documentation for each source file in the rustbox project. Each markdown file provides detailed explanations of the code structure, functions, and implementation details.
 
 > **Note**: This documentation is automatically generated from source code analysis and provides developer-level technical details. For user documentation, see the [main docs](../README.md).
 
@@ -143,10 +143,10 @@ main.rs (entry point)
 ## Usage Patterns
 
 ### Basic Workflow
-1. **Initialize**: `mini-isolate init --box-id mybox`
-2. **Execute**: `mini-isolate run --box-id mybox program args`
+1. **Initialize**: `rustbox init --box-id mybox`
+2. **Execute**: `rustbox run --box-id mybox program args`
 3. **Monitor**: Results include resource usage and timing
-4. **Cleanup**: `mini-isolate cleanup --box-id mybox`
+4. **Cleanup**: `rustbox cleanup --box-id mybox`
 
 ### Advanced Features
 - **Resource Overrides**: Runtime limit adjustments
@@ -194,4 +194,4 @@ main.rs (entry point)
 - **Monitoring Hooks**: Real-time monitoring callbacks
 - **Result Processors**: Custom result processing pipelines
 
-This knowledge base provides comprehensive technical documentation for understanding, maintaining, and extending the Mini-Isolate codebase. Each file contains detailed function-level documentation with implementation details, security considerations, and usage patterns.
+This knowledge base provides comprehensive technical documentation for understanding, maintaining, and extending the rustbox codebase. Each file contains detailed function-level documentation with implementation details, security considerations, and usage patterns.

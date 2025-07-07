@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple Stress Test Program for Mini-Isolate
+Simple Stress Test Program for rustbox
 Configurable CPU + Memory workload with clear progress reporting
 """
 

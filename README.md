@@ -1,11 +1,11 @@
-# Mini-Isolate
+# rustbox
 
 A Rust-based secure sandbox for executing untrusted code safely, inspired by IOI isolate.
 
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Mini-Isolate provides a secure, resource-controlled environment for executing untrusted code, making it ideal for programming contests, educational platforms, and automated judging systems.
+rustbox provides a secure, resource-controlled environment for executing untrusted code, making it ideal for programming contests, educational platforms, and automated judging systems.
 
 ## 🚀 Features
 
@@ -20,7 +20,7 @@ Mini-Isolate provides a secure, resource-controlled environment for executing un
 
 ## 🔐 Permission Requirements
 
-**Important**: Mini-isolate requires sudo/root permissions for full cgroup-based resource isolation, but works gracefully without it.
+**Important**: rustbox requires sudo/root permissions for full cgroup-based resource isolation, but works gracefully without it.
 
 ### Without sudo:
 - ✅ **All functionality works** (process execution, timeouts, file operations)
@@ -35,23 +35,23 @@ Mini-Isolate provides a secure, resource-controlled environment for executing un
 ### Usage Examples:
 ```bash
 # Basic functionality (no sudo required)
-mini-isolate init --box-id 0
-mini-isolate execute --box-id 0 --source hello.py
+rustbox init --box-id 0
+rustbox execute --box-id 0 --source hello.py
 
 # Full functionality (sudo required for resource limits)
-sudo mini-isolate init --box-id 0 --mem 128 --time 10
-sudo mini-isolate execute --box-id 0 --source memory_test.py
+sudo rustbox init --box-id 0 --mem 128 --time 10
+sudo rustbox execute --box-id 0 --source memory_test.py
 
 # Strict mode (like IOI isolate - requires sudo, fails without cgroups)
-sudo mini-isolate init --box-id 0 --mem 128 --time 10 --strict
-sudo mini-isolate run --box-id 0 --strict python3 solution.py
+sudo rustbox init --box-id 0 --mem 128 --time 10 --strict
+sudo rustbox run --box-id 0 --strict python3 solution.py
 
 # Strict mode without sudo (will fail)
-mini-isolate init --box-id 0 --strict  # Error: requires root privileges
+rustbox init --box-id 0 --strict  # Error: requires root privileges
 ```
 
 ### Alternative Solutions:
-- **Docker containers**: Run mini-isolate inside containers with cgroup delegation
+- **Docker containers**: Run rustbox inside containers with cgroup delegation
 - **User namespaces**: Configure for unprivileged cgroup access
 - **Systemd user slices**: Use systemd for resource management
 
@@ -69,14 +69,14 @@ mini-isolate init --box-id 0 --strict  # Error: requires root privileges
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd mini-isolate
+cd rustbox
 
 # Build the release version
 cargo build --release
 
-# The binary will be available at ./target/release/mini-isolate
+# The binary will be available at ./target/release/rustbox
 # Optionally, copy to system PATH
-sudo cp target/release/mini-isolate /usr/local/bin/
+sudo cp target/release/rustbox /usr/local/bin/
 ```
 
 ### Option 2: Using Cargo
@@ -91,30 +91,30 @@ cargo install --git <repository-url>
 
 ```bash
 # Create a new isolate with resource limits
-mini-isolate init --box-id 0 --mem 128 --time 10 --wall-time 20
+rustbox init --box-id 0 --mem 128 --time 10 --wall-time 20
 ```
 
 ### 2. Execute Code
 
 ```bash
 # Run a simple command
-mini-isolate run --box-id 0 "/bin/echo" -- "Hello, World!"
+rustbox run --box-id 0 "/bin/echo" -- "Hello, World!"
 
 # Execute a Python script directly
 echo 'print("Hello from Python!")' > hello.py
-mini-isolate execute --box-id 0 --source hello.py --verbose
+rustbox execute --box-id 0 --source hello.py --verbose
 
 # Execute with input file
 echo "5 3" > input.txt
 echo 'a, b = map(int, input().split()); print(a + b)' > sum.py
-mini-isolate execute --box-id 0 --source sum.py --input input.txt
+rustbox execute --box-id 0 --source sum.py --input input.txt
 ```
 
 ### 3. Get Structured Results
 
 ```bash
 # Execute with JSON output
-mini-isolate execute --box-id 0 --source hello.py --output result.json
+rustbox execute --box-id 0 --source hello.py --output result.json
 cat result.json
 ```
 
@@ -138,10 +138,10 @@ Example output:
 
 ```bash
 # Clean up a specific instance
-mini-isolate cleanup --box-id 0
+rustbox cleanup --box-id 0
 
 # Clean up all instances
-mini-isolate cleanup --all
+rustbox cleanup --all
 ```
 
 ## 📚 Documentation
@@ -154,7 +154,7 @@ mini-isolate cleanup --all
 
 ## 🏗️ Architecture
 
-Mini-Isolate is built with a modular architecture:
+rustbox is built with a modular architecture:
 
 ```
 src/
@@ -172,25 +172,25 @@ src/
 ```bash
 # Setup for contest environment
 for i in {0..9}; do
-    mini-isolate init --box-id $i --mem 256 --time 30 --wall-time 60
+    rustbox init --box-id $i --mem 256 --time 30 --wall-time 60
 done
 
 # Judge a submission
-mini-isolate execute --box-id 0 --source solution.cpp \
+rustbox execute --box-id 0 --source solution.cpp \
     --input test1.in --output result.json
 ```
 
 ### Educational Platforms
 ```bash
 # Safe execution of student code
-mini-isolate init --box-id classroom --mem 128 --time 10
-mini-isolate execute --box-id classroom --source student_code.py --verbose
+rustbox init --box-id classroom --mem 128 --time 10
+rustbox execute --box-id classroom --source student_code.py --verbose
 ```
 
 ### Automated Testing
 ```bash
 # CI/CD integration
-mini-isolate execute --box-id ci --source test_suite.py \
+rustbox execute --box-id ci --source test_suite.py \
     --output test_results.json --time 60
 ```
 
@@ -216,7 +216,7 @@ mini-isolate execute --box-id ci --source test_suite.py \
 ### Custom Compilation
 ```bash
 # Custom C++ compilation with specific flags
-mini-isolate execute --box-id 0 --source solution.cpp \
+rustbox execute --box-id 0 --source solution.cpp \
     --compile-flags "-O2 -std=c++17" --verbose
 ```
 
@@ -225,7 +225,7 @@ mini-isolate execute --box-id 0 --source solution.cpp \
 # Batch testing
 for test in tests/*.in; do
     output="${test%.in}.out"
-    mini-isolate execute --box-id 0 --source solution.py \
+    rustbox execute --box-id 0 --source solution.py \
         --input "$test" --output "result_$(basename $test .in).json"
 done
 ```
@@ -233,7 +233,7 @@ done
 ### Performance Analysis
 ```bash
 # Performance monitoring
-mini-isolate execute --box-id perf --source benchmark.py \
+rustbox execute --box-id perf --source benchmark.py \
     --output perf.json --verbose
 
 # Extract timing information
@@ -254,10 +254,10 @@ with open('perf.json') as f:
 1. **Permission Denied for Cgroups**
    ```bash
    # Run with sudo for full functionality
-   sudo mini-isolate init --box-id 0 --mem 128
+   sudo rustbox init --box-id 0 --mem 128
    
    # Alternative: Run without sudo (limited functionality)
-   mini-isolate init --box-id 0  # Resource limits won't be enforced
+   rustbox init --box-id 0  # Resource limits won't be enforced
    ```
 
 2. **Compilation Errors**
@@ -281,7 +281,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ```bash
 # Clone and build
 git clone <repository-url>
-cd mini-isolate
+cd rustbox
 cargo build
 
 # Run tests

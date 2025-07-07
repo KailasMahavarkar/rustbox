@@ -1,6 +1,6 @@
-# Mini-Isolate Test Suite Documentation
+# rustbox Test Suite Documentation
 
-This document describes the comprehensive test suite for Mini-Isolate, covering functionality, security, performance, and code quality.
+This document describes the comprehensive test suite for rustbox, covering functionality, security, performance, and code quality.
 
 ## Test Structure
 
@@ -300,14 +300,14 @@ For interactive testing:
 cargo build --release
 
 # Initialize test environment
-./target/release/mini-isolate init --box-id manual_test --mem 64
+./target/release/rustbox init --box-id manual_test --mem 64
 
 # Run test script
 echo 'print("Manual test")' > test.py
-./target/release/mini-isolate execute --box-id manual_test --source test.py --verbose
+./target/release/rustbox execute --box-id manual_test --source test.py --verbose
 
 # Cleanup
-./target/release/mini-isolate cleanup --box-id manual_test
+./target/release/rustbox cleanup --box-id manual_test
 ```
 
 ## Contributing Tests
@@ -331,4 +331,4 @@ When adding new functionality:
 - Include both positive and negative test cases
 - Clean up resources properly
 
-This comprehensive test suite ensures Mini-Isolate functions correctly across various scenarios and system configurations while maintaining security and performance standards.
+This comprehensive test suite ensures rustbox functions correctly across various scenarios and system configurations while maintaining security and performance standards.

@@ -1,6 +1,6 @@
 # Cgroup Module Documentation
 
-The `cgroup.rs` module provides Linux cgroup-v1 integration for resource control in the Mini-Isolate system.
+The `cgroup.rs` module provides Linux cgroup-v1 integration for resource control in the rustbox system.
 
 ## Overview
 
@@ -269,7 +269,7 @@ Cgroup operations typically require root privileges or proper permissions:
 
 ```bash
 # Run with elevated privileges
-sudo ./mini-isolate init --box-id 0
+sudo ./rustbox init --box-id 0
 
 # Or configure cgroup permissions for user
 sudo chown -R user:user /sys/fs/cgroup/memory/user/

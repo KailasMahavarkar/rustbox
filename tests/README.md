@@ -1,10 +1,10 @@
-# Mini-Isolate Test Suite
+# rustbox Test Suite
 
-This directory contains comprehensive tests for the Mini-Isolate sandboxing system, organized into logical categories for easy maintenance and execution.
+This directory contains comprehensive tests for the rustbox sandboxing system, organized into logical categories for easy maintenance and execution.
 
 ## Test Organization
 
-**Note**: Legacy Rust test directories have been removed as they referenced non-existent functions and were not functional. The current structure focuses on working shell-based tests that actually test the compiled mini-isolate binary.
+**Note**: Legacy Rust test directories have been removed as they referenced non-existent functions and were not functional. The current structure focuses on working shell-based tests that actually test the compiled rustbox binary.
 
 ### 📁 Core Tests (`tests/core/`)
 Basic functionality and essential features
@@ -132,7 +132,7 @@ System performance characteristics:
   - Namespace support
   - Seccomp support
   - Python 3 (for stress tests)
-- **Mini-Isolate Binary**: Must be built at `../target/release/mini-isolate`
+- **rustbox Binary**: Must be built at `../target/release/rustbox`
 
 ## Test Output Format
 
@@ -161,11 +161,11 @@ Each test category provides:
 ```bash
 #!/bin/bash
 
-# [Category] Tests for Mini-Isolate
+# [Category] Tests for rustbox
 # Description of test purpose
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 
 if [[ $EUID -ne 0 ]]; then
     echo "❌ This script requires sudo privileges"
@@ -187,7 +187,7 @@ echo "===== [Category] Tests ====="
 
 ### Common Issues
 - **Permission Denied**: Ensure running with sudo
-- **Binary Not Found**: Build mini-isolate first with `cargo build --release`
+- **Binary Not Found**: Build rustbox first with `cargo build --release`
 - **Resource Limits**: Ensure system supports cgroups v1
 - **Namespace Issues**: Check kernel namespace support
 

@@ -1,7 +1,7 @@
 # lib.rs - Library Root Module
 
 ## Overview
-The root library module for Mini-Isolate, a process isolation and resource control system inspired by IOI Isolate. This module serves as the main entry point for organizing the codebase and defines the public API structure.
+The root library module for rustbox, a process isolation and resource control system inspired by IOI Isolate. This module serves as the main entry point for organizing the codebase and defines the public API structure.
 
 ## File Location
 `src/lib.rs`
@@ -70,7 +70,7 @@ lib.rs (root)
 ## Usage Context
 This module is typically used by:
 - The main binary (`main.rs`) for CLI operations
-- External crates that want to embed mini-isolate functionality
+- External crates that want to embed rustbox functionality
 - Test suites that need access to the core library components
 
 ## Security Considerations

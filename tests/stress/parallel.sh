@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Parallel Mini-Isolate Test
+# Parallel rustbox Test
 # Runs 50 isolates concurrently with resource limits
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 STRESS_PROGRAM="$SCRIPT_DIR/stress_program.py"
 
 if [[ $EUID -ne 0 ]]; then
@@ -35,7 +35,7 @@ for i in {1..50}; do
         fi
         
         # Copy stress program and run
-        sudo cp "$STRESS_PROGRAM" "/tmp/mini-isolate/$box_id/stress_program.py"
+        sudo cp "$STRESS_PROGRAM" "/tmp/rustbox/$box_id/stress_program.py"
         
         result=$(sudo "$MINI_ISOLATE" run \
             --box-id "$box_id" \

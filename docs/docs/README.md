@@ -1,10 +1,10 @@
-# Mini-Isolate Documentation
+# rustbox Documentation
 
-Mini-Isolate is a process isolation and resource control system inspired by the IOI Isolate project. It provides secure execution environments for running untrusted code with strict resource limits using cgroup-v1 support.
+rustbox is a process isolation and resource control system inspired by the IOI Isolate project. It provides secure execution environments for running untrusted code with strict resource limits using cgroup-v1 support.
 
 ## Overview
 
-Mini-Isolate focuses on:
+rustbox focuses on:
 - **Process Isolation**: Secure execution environments for untrusted programs
 - **Resource Control**: Memory, CPU, time, and process limits using cgroups
 - **Security**: Sandboxed execution with controlled system access
@@ -43,29 +43,29 @@ The system is designed with a modular architecture:
 
 ```bash
 cargo build --release
-sudo cp target/release/mini-isolate /usr/local/bin/
+sudo cp target/release/rustbox /usr/local/bin/
 ```
 
 ### Basic Usage
 
 1. **Initialize an isolate instance:**
 ```bash
-mini-isolate init --box-id 0 --mem 128 --time 10 --processes 1
+rustbox init --box-id 0 --mem 128 --time 10 --processes 1
 ```
 
 2. **Execute a program:**
 ```bash
-mini-isolate run --box-id 0 "echo Hello World"
+rustbox run --box-id 0 "echo Hello World"
 ```
 
 3. **Execute a source file:**
 ```bash
-mini-isolate execute --box-id 0 --source hello.py
+rustbox execute --box-id 0 --source hello.py
 ```
 
 4. **Clean up:**
 ```bash
-mini-isolate cleanup --box-id 0
+rustbox cleanup --box-id 0
 ```
 
 ## Documentation Structure
@@ -91,7 +91,7 @@ mini-isolate cleanup --box-id 0
 
 ## Differences from IOI Isolate
 
-While inspired by IOI Isolate, Mini-Isolate has some differences:
+While inspired by IOI Isolate, rustbox has some differences:
 
 1. **Cgroup Version**: Uses cgroup-v1 (Rust ecosystem limitation)
 2. **Implementation**: Written in Rust for memory safety

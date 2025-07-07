@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Security Tests for Mini-Isolate
+# Security Tests for rustbox
 # Tests isolation and security features
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MINI_ISOLATE="$SCRIPT_DIR/../../target/release/mini-isolate"
+MINI_ISOLATE="$SCRIPT_DIR/../../target/release/rustbox"
 
 # Colors
 GREEN='\033[0;32m'
@@ -20,7 +20,7 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-echo "===== Mini-Isolate Security Tests ====="
+echo "===== rustbox Security Tests ====="
 echo ""
 
 passed=0
