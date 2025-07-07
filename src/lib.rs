@@ -12,3 +12,4 @@ pub mod resource_limits;
 pub mod seccomp;
 pub mod seccomp_native;
 pub mod types;
+pub mod lock_manager;

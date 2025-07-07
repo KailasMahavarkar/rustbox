@@ -53,6 +53,10 @@ pub enum Commands {
         #[arg(long, default_value = "0")]
         core: u64,
 
+        /// File descriptor limit (max open files)
+        #[arg(long, default_value = "64")]
+        fd_limit: u64,
+
         /// Disk quota limit in MB (0 to disable)
         #[arg(long)]
         quota: Option<u64>,
@@ -106,6 +110,10 @@ pub enum Commands {
         /// Override execution time limit in seconds
         #[arg(long)]
         max_time: Option<u64>,
+
+        /// Override file descriptor limit (max open files)
+        #[arg(long)]
+        fd_limit: Option<u64>,
 
         /// Strict mode: require root privileges and fail if cgroups unavailable
         #[arg(long)]
@@ -168,6 +176,14 @@ pub enum Commands {
         /// Enable user namespace isolation (experimental)
         #[arg(long)]
         enable_user_namespace: bool,
+
+        /// Run as specific user ID (requires root privileges)
+        #[arg(long)]
+        as_uid: Option<u32>,
+
+        /// Run as specific group ID (requires root privileges)
+        #[arg(long)]
+        as_gid: Option<u32>,
     },
 
     /// Execute a source file directly
@@ -211,6 +227,10 @@ pub enum Commands {
         /// Override execution time limit in seconds
         #[arg(long)]
         max_time: Option<u64>,
+
+        /// Override file descriptor limit (max open files)
+        #[arg(long)]
+        fd_limit: Option<u64>,
 
         /// Strict mode: require root privileges and fail if cgroups unavailable
         #[arg(long)]
@@ -271,6 +291,14 @@ pub enum Commands {
         /// Enable user namespace isolation (experimental)
         #[arg(long)]
         enable_user_namespace: bool,
+
+        /// Run as specific user ID (requires root privileges)
+        #[arg(long)]
+        as_uid: Option<u32>,
+
+        /// Run as specific group ID (requires root privileges)
+        #[arg(long)]
+        as_gid: Option<u32>,
     },
     List,
 
@@ -404,6 +432,7 @@ pub fn run() -> anyhow::Result<()> {
             fsize,
             stack,
             core,
+            fd_limit,
             quota,
             strict,
         } => {
@@ -432,6 +461,7 @@ pub fn run() -> anyhow::Result<()> {
             config.file_size_limit = Some(fsize * 1024 * 1024); // Convert MB to bytes
             config.stack_limit = Some(stack * 1024 * 1024); // Convert MB to bytes
             config.core_limit = Some(core * 1024 * 1024); // Convert MB to bytes
+            config.fd_limit = Some(fd_limit); // File descriptor limit (no conversion needed)
             config.disk_quota = quota.map(|q| q * 1024 * 1024); // Convert MB to bytes
 
             let isolate = Isolate::new(config)?;
@@ -454,6 +484,7 @@ pub fn run() -> anyhow::Result<()> {
             max_cpu,
             max_memory,
             max_time,
+            fd_limit,
             strict,
             chroot,
             env_vars,
@@ -466,10 +497,12 @@ pub fn run() -> anyhow::Result<()> {
             use_pipes,
             io_buffer_size,
             text_encoding,
-            no_pid_namespace,
-            no_mount_namespace,
-            no_network_namespace,
-            enable_user_namespace,
+            no_pid_namespace: _,
+            no_mount_namespace: _,
+            no_network_namespace: _,
+            enable_user_namespace: _,
+            as_uid,
+            as_gid,
         } => {
             let mut isolate = match Isolate::load(&box_id)? {
                 Some(mut isolate) => {
@@ -479,9 +512,14 @@ pub fn run() -> anyhow::Result<()> {
                         config.strict_mode = true;
                     }
 
-                    // Update chroot directory
+                    // Update chroot directory - enable by default for security
                     if let Some(chroot_dir) = chroot {
                         config.chroot_dir = Some(chroot_dir);
+                    } else if config.strict_mode {
+                        // In strict mode, create a default chroot jail
+                        let mut chroot_path = config.workdir.clone();
+                        chroot_path.push("jail");
+                        config.chroot_dir = Some(chroot_path);
                     }
 
                     // Update environment variables
@@ -494,22 +532,14 @@ pub fn run() -> anyhow::Result<()> {
                     config.stdout_file = stdout_file;
                     config.stderr_file = stderr_file;
 
-                    // Update namespace configuration
-                    config.enable_pid_namespace = !no_pid_namespace;
-                    config.enable_mount_namespace = !no_mount_namespace;
-                    config.enable_network_namespace = !no_network_namespace;
-                    config.enable_user_namespace = enable_user_namespace;
+                    // Set uid/gid if specified
+                    config.uid = as_uid;
+                    config.gid = as_gid;
                     config.stdin_file = stdin_file;
                     config.enable_tty = enable_tty;
                     config.use_pipes = use_pipes;
                     config.io_buffer_size = io_buffer_size;
                     config.text_encoding = text_encoding;
-
-                    // Update namespace configuration
-                    config.enable_pid_namespace = !no_pid_namespace;
-                    config.enable_mount_namespace = !no_mount_namespace;
-                    config.enable_network_namespace = !no_network_namespace;
-                    config.enable_user_namespace = enable_user_namespace;
 
                     isolate = Isolate::new(config)?;
                     isolate
@@ -532,13 +562,14 @@ pub fn run() -> anyhow::Result<()> {
             command.extend(args);
 
             // Execute command with optional overrides
-            let result = if max_cpu.is_some() || max_memory.is_some() || max_time.is_some() {
+            let result = if max_cpu.is_some() || max_memory.is_some() || max_time.is_some() || fd_limit.is_some() {
                 isolate.execute_with_overrides(
                     &command,
                     stdin_data.as_deref(),
                     max_cpu,
                     max_memory,
                     max_time,
+                    fd_limit,
                 )?
             } else {
                 isolate.execute(&command, stdin_data.as_deref())?
@@ -612,6 +643,7 @@ pub fn run() -> anyhow::Result<()> {
             max_cpu,
             max_memory,
             max_time,
+            fd_limit,
             strict,
             env_vars,
             full_env,
@@ -627,6 +659,8 @@ pub fn run() -> anyhow::Result<()> {
             no_mount_namespace: _,
             no_network_namespace: _,
             enable_user_namespace: _,
+            as_uid: _,
+            as_gid: _,
         } => {
             let mut isolate = match Isolate::load(&box_id)? {
                 Some(mut isolate) => {
@@ -663,13 +697,14 @@ pub fn run() -> anyhow::Result<()> {
             };
 
             // Execute source file with optional overrides
-            let result = if max_cpu.is_some() || max_memory.is_some() || max_time.is_some() {
+            let result = if max_cpu.is_some() || max_memory.is_some() || max_time.is_some() || fd_limit.is_some() {
                 isolate.execute_file_with_overrides(
                     &source,
                     stdin_data.as_deref(),
                     max_cpu,
                     max_memory,
                     max_time,
+                    fd_limit,
                 )?
             } else {
                 isolate.execute_file(&source, stdin_data.as_deref())?

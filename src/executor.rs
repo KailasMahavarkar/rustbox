@@ -1,5 +1,6 @@
 /// Process execution and monitoring with reliable resource limits
 use crate::cgroup::CgroupController;
+use crate::filesystem::FilesystemSecurity;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig, IsolateError, Result};
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -13,6 +14,7 @@ use std::os::unix::process::ExitStatusExt;
 pub struct ProcessExecutor {
     config: IsolateConfig,
     cgroup: Option<CgroupController>,
+    filesystem_security: FilesystemSecurity,
 }
 
 impl ProcessExecutor {
@@ -34,7 +36,23 @@ impl ProcessExecutor {
             None
         };
 
-        Ok(Self { config, cgroup })
+        // Create filesystem security controller
+        let filesystem_security = FilesystemSecurity::new(
+            config.chroot_dir.clone(),
+            config.workdir.clone(),
+            config.strict_mode
+        );
+
+        // Set up filesystem isolation if chroot is specified
+        if config.chroot_dir.is_some() {
+            filesystem_security.setup_isolation()?;
+        }
+
+        Ok(Self { 
+            config, 
+            cgroup,
+            filesystem_security,
+        })
     }
 
     /// Setup resource limits using cgroups only
@@ -91,6 +109,52 @@ impl ProcessExecutor {
         // Add custom environment variables
         for (key, value) in &self.config.environment {
             cmd.env(key, value);
+        }
+
+        // Setup resource limits using rlimits in pre_exec hook
+        use std::os::unix::process::CommandExt;
+        let config_clone = self.config.clone();
+        let filesystem_security = self.filesystem_security.clone();
+        unsafe {
+            cmd.pre_exec(move || {
+                // Apply filesystem isolation (chroot) first if configured
+                if config_clone.chroot_dir.is_some() {
+                    if let Err(e) = filesystem_security.apply_chroot() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!("Failed to apply chroot: {}", e)
+                        ));
+                    }
+                }
+
+                // Set file descriptor limit if specified
+                if let Some(fd_limit) = config_clone.fd_limit {
+                    use nix::sys::resource::{setrlimit, Resource};
+                    setrlimit(Resource::RLIMIT_NOFILE, fd_limit, fd_limit)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("setrlimit failed: {}", e)))?;
+                }
+
+                // Drop privileges if uid/gid specified (requires root to start)
+                if let Some(gid) = config_clone.gid {
+                    if libc::setgid(gid) != 0 {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied, 
+                            format!("Failed to setgid to {}", gid)
+                        ));
+                    }
+                }
+                
+                if let Some(uid) = config_clone.uid {
+                    if libc::setuid(uid) != 0 {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied, 
+                            format!("Failed to setuid to {}", uid)
+                        ));
+                    }
+                }
+
+                Ok(())
+            });
         }
 
         // Start the process

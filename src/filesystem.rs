@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::os::unix::fs::PermissionsExt;
 
 /// Filesystem security controller for process isolation
+#[derive(Clone, Debug)]
 pub struct FilesystemSecurity {
     /// Root directory for chroot jail
     chroot_dir: Option<PathBuf>,

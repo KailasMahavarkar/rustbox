@@ -31,6 +31,33 @@ impl ResourceLimitController {
         }
     }
 
+    /// Set file descriptor limit using rlimit
+    pub fn set_fd_limit(&self, limit: u64) -> Result<()> {
+        match setrlimit(Resource::RLIMIT_NOFILE, limit, limit) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let error_msg = format!("Failed to set file descriptor limit: {}", e);
+                if self.strict_mode {
+                    Err(IsolateError::ResourceLimit(error_msg))
+                } else {
+                    eprintln!("Warning: {}", error_msg);
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// Get current file descriptor limit
+    pub fn get_fd_limit(&self) -> Result<(u64, u64)> {
+        match getrlimit(Resource::RLIMIT_NOFILE) {
+            Ok((soft, hard)) => Ok((soft, hard)),
+            Err(e) => Err(IsolateError::ResourceLimit(format!(
+                "Failed to get file descriptor limit: {}",
+                e
+            ))),
+        }
+    }
+
     /// Set core dump size limit using rlimit
     pub fn set_core_limit(&self, limit_bytes: u64) -> Result<()> {
         match setrlimit(Resource::RLIMIT_CORE, limit_bytes, limit_bytes) {

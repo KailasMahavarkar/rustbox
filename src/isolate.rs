@@ -139,6 +139,7 @@ impl Isolate {
         max_cpu: Option<u64>,
         max_memory: Option<u64>,
         max_time: Option<u64>,
+        fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         // Update last used timestamp
         self.instance.last_used = chrono::Utc::now();
@@ -158,6 +159,10 @@ impl Isolate {
 
         if let Some(time_seconds) = max_time {
             config.wall_time_limit = Some(Duration::from_secs(time_seconds));
+        }
+
+        if let Some(fd_limit_val) = fd_limit {
+            config.fd_limit = Some(fd_limit_val);
         }
 
         // Create executor with modified config
@@ -202,6 +207,7 @@ impl Isolate {
         max_cpu: Option<u64>,
         max_memory: Option<u64>,
         max_time: Option<u64>,
+        fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         if !file_path.exists() {
             return Err(IsolateError::Config(format!(
@@ -221,7 +227,7 @@ impl Isolate {
         // Determine execution command based on file extension
         let command = self.get_execution_command(&dest_path)?;
 
-        self.execute_with_overrides(&command, stdin_data, max_cpu, max_memory, max_time)
+        self.execute_with_overrides(&command, stdin_data, max_cpu, max_memory, max_time, fd_limit)
     }
 
     /// Get execution command based on file extension
