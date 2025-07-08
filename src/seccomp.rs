@@ -5,7 +5,9 @@
 /// while providing better usability through language-specific profiles.
 use crate::types::Result;
 use std::collections::HashSet;
-
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::SystemTime;
 
 use libseccomp::*;
 
@@ -16,10 +18,13 @@ use libseccomp::*;
 /// isolate's approach which relies primarily on resource limits.
 pub struct SeccompFilter {
     /// Action to take for blocked syscalls (only used when seccomp is available)
-    
     default_action: ScmpAction,
     /// Set of explicitly allowed syscalls
     allowed_syscalls: HashSet<String>,
+    /// Enable audit logging for security violations
+    enable_audit: bool,
+    /// Path to security audit log
+    audit_log_path: Option<String>,
 }
 
 impl SeccompFilter {
@@ -78,6 +83,31 @@ impl SeccompFilter {
             
             // Statistics and resource usage
             "getrusage", "times",
+            
+            // Additional essential syscalls for modern programs
+            "newfstatat", "statx", // Modern stat syscalls
+            "pread64", "pwrite64", // Position-independent I/O
+            "eventfd", "eventfd2", // Event notification
+            "signalfd", "signalfd4", // Signal handling via file descriptors
+            "timerfd_create", "timerfd_settime", "timerfd_gettime", // Timer file descriptors
+            "inotify_init", "inotify_init1", "inotify_add_watch", "inotify_rm_watch", // File monitoring
+            
+            // Memory management for modern runtimes (safe subset)
+            "mmap2", "munmap2", // Alternative memory mapping syscalls
+            "msync", // Memory synchronization
+            
+            // Process and thread management
+            "gettid", "set_tid_address", // Thread identification
+            "set_robust_list", "get_robust_list", // Robust futex lists
+            
+            // File system metadata
+            "getxattr", "listxattr", "fgetxattr", "flistxattr", // Extended attributes (read-only)
+            
+            // Socket operations (very limited - only for local IPC)
+            "socketpair", // Already included but ensure it's here
+            
+            // Additional signal handling
+            "rt_sigtimedwait", "rt_sigqueueinfo", // Advanced signal operations
         ];
         
         for syscall in &essential {
@@ -85,9 +115,10 @@ impl SeccompFilter {
         }
         
         Self {
-            
             default_action: ScmpAction::KillProcess, // Kill immediately on violation
             allowed_syscalls,
+            enable_audit: true,
+            audit_log_path: Some("/tmp/rustbox_security.log".to_string()),
         }
     }
     
@@ -118,11 +149,24 @@ impl SeccompFilter {
                 filter.add_rust_syscalls();
             }
             _ => {
-                log::warn!("Unknown language profile '{}', using anonymous code filter", language);
+                filter.log_security_event(
+                    &format!("Unknown language profile '{}', using anonymous code filter", language),
+                    "WARN"
+                );
             }
         }
         
         filter
+    }
+    
+    /// Enable or disable audit logging
+    pub fn set_audit_enabled(&mut self, enabled: bool) {
+        self.enable_audit = enabled;
+    }
+    
+    /// Set custom audit log path
+    pub fn set_audit_log_path(&mut self, path: Option<String>) {
+        self.audit_log_path = path;
     }
     
     /// Add syscalls commonly needed by Python interpreters
@@ -150,7 +194,7 @@ impl SeccompFilter {
             self.allowed_syscalls.insert(syscall.to_string());
         }
         
-        log::info!("Added Python-specific syscalls to seccomp filter");
+        self.log_security_event("Added Python-specific syscalls to seccomp filter", "INFO");
     }
     
     /// Add syscalls commonly needed by JavaScript/Node.js
@@ -176,7 +220,7 @@ impl SeccompFilter {
             self.allowed_syscalls.insert(syscall.to_string());
         }
         
-        log::info!("Added JavaScript/Node.js-specific syscalls to seccomp filter");
+        self.log_security_event("Added JavaScript/Node.js-specific syscalls to seccomp filter", "INFO");
     }
     
     /// Add syscalls commonly needed by Java JVM
@@ -203,7 +247,7 @@ impl SeccompFilter {
             self.allowed_syscalls.insert(syscall.to_string());
         }
         
-        log::info!("Added Java JVM-specific syscalls to seccomp filter");
+        self.log_security_event("Added Java JVM-specific syscalls to seccomp filter", "INFO");
     }
     
     /// Add syscalls for compiled languages (C/C++)
@@ -223,7 +267,7 @@ impl SeccompFilter {
             self.allowed_syscalls.insert(syscall.to_string());
         }
         
-        log::info!("Added compiled language-specific syscalls to seccomp filter");
+        self.log_security_event("Added compiled language-specific syscalls to seccomp filter", "INFO");
     }
     
     /// Add syscalls commonly needed by Go programs
@@ -247,7 +291,7 @@ impl SeccompFilter {
             self.allowed_syscalls.insert(syscall.to_string());
         }
         
-        log::info!("Added Go-specific syscalls to seccomp filter");
+        self.log_security_event("Added Go-specific syscalls to seccomp filter", "INFO");
     }
     
     /// Add syscalls commonly needed by Rust programs
@@ -270,37 +314,99 @@ impl SeccompFilter {
             self.allowed_syscalls.insert(syscall.to_string());
         }
         
-        log::info!("Added Rust-specific syscalls to seccomp filter");
+        self.log_security_event("Added Rust-specific syscalls to seccomp filter", "INFO");
     }
     
     /// Apply the seccomp filter to the current process
     pub fn apply(&self) -> Result<()> {
+        // Log security filter application
+        self.log_security_event("Applying seccomp filter", "INFO");
         
-        {
-            // Initialize seccomp context with default kill action
-            let mut ctx = ScmpFilterContext::new_filter(self.default_action)
-                .map_err(|e| crate::types::IsolateError::Config(format!("Failed to create seccomp context: {}", e)))?;
+        // Initialize seccomp context with default kill action
+        let mut ctx = ScmpFilterContext::new_filter(self.default_action)
+            .map_err(|e| crate::types::IsolateError::Config(format!("Failed to create seccomp context: {}", e)))?;
+        
+        // Add rules for allowed syscalls
+        for syscall_name in &self.allowed_syscalls {
+            let syscall = ScmpSyscall::from_name(syscall_name)
+                .map_err(|e| crate::types::IsolateError::Config(format!("Unknown syscall '{}': {}", syscall_name, e)))?;
             
-            // Add rules for allowed syscalls
-            for syscall_name in &self.allowed_syscalls {
-                let syscall = ScmpSyscall::from_name(syscall_name)
-                    .map_err(|e| crate::types::IsolateError::Config(format!("Unknown syscall '{}': {}", syscall_name, e)))?;
-                
-                ctx.add_rule(ScmpAction::Allow, syscall)
-                    .map_err(|e| crate::types::IsolateError::Config(format!("Failed to add rule for {}: {}", syscall_name, e)))?;
-            }
-            
-            // Load the filter into the kernel
-            ctx.load()
-                .map_err(|e| crate::types::IsolateError::Config(format!("Failed to load seccomp filter: {}", e)))?;
-            
-            log::info!("Seccomp filter applied successfully with {} allowed syscalls", self.allowed_syscalls.len());
+            ctx.add_rule(ScmpAction::Allow, syscall)
+                .map_err(|e| crate::types::IsolateError::Config(format!("Failed to add rule for {}: {}", syscall_name, e)))?;
         }
         
+        // Add audit rules for dangerous syscalls (for monitoring)
+        if self.enable_audit {
+            self.add_audit_rules(&mut ctx)?;
+        }
         
-
+        // Load the filter into the kernel
+        ctx.load()
+            .map_err(|e| crate::types::IsolateError::Config(format!("Failed to load seccomp filter: {}", e)))?;
+        
+        self.log_security_event(
+            &format!("Seccomp filter applied successfully with {} allowed syscalls", self.allowed_syscalls.len()),
+            "INFO"
+        );
         
         Ok(())
+    }
+    
+    /// Add audit rules for monitoring dangerous syscalls
+    fn add_audit_rules(&self, ctx: &mut ScmpFilterContext) -> Result<()> {
+        let dangerous_syscalls = [
+            "socket", "connect", "bind", "listen", "accept", "accept4",
+            "fork", "vfork", "clone", "execve", "execveat",
+            "mount", "umount", "umount2", "chroot", "pivot_root",
+            "setuid", "setgid", "setreuid", "setregid",
+            "ptrace", "process_vm_readv", "process_vm_writev",
+        ];
+        
+        for syscall_name in &dangerous_syscalls {
+            if let Ok(syscall) = ScmpSyscall::from_name(syscall_name) {
+                // Try to add trap rule for auditing (fallback to kill if not supported)
+                let _ = ctx.add_rule(ScmpAction::Trap, syscall);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Log security events to audit log
+    fn log_security_event(&self, message: &str, level: &str) {
+        if !self.enable_audit {
+            return;
+        }
+        
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let log_entry = format!(
+            "[{}] [{}] SECCOMP: {} (PID: {})\n",
+            timestamp,
+            level,
+            message,
+            std::process::id()
+        );
+        
+        if let Some(ref path) = self.audit_log_path {
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = file.write_all(log_entry.as_bytes());
+            }
+        }
+        
+        // Also log to system log
+        match level {
+            "ERROR" => log::error!("{}", message),
+            "WARN" => log::warn!("{}", message),
+            _ => log::info!("{}", message),
+        }
     }
     
     /// Check if a syscall is allowed by this filter
@@ -425,6 +531,51 @@ pub fn get_dangerous_syscalls() -> Vec<&'static str> {
         "vm86", "vm86old",
         
         // Architecture-specific dangerous syscalls
+        "modify_ldt", // arch_prctl is partially allowed for language runtimes
+        
+        // File locking (can be used for DoS)
+        "flock", // fcntl is partially allowed for basic operations
+        
+        // Timer manipulation (prevent timer abuse)
+        "timer_create", "timer_settime", "timer_gettime", "timer_getoverrun", "timer_delete",
+        
+        // NUMA operations (prevent NUMA manipulation)
+        "set_mempolicy", "get_mempolicy", "mbind",
+        
+        // CPU cache operations (prevent cache attacks)
+        "cacheflush",
+        
+        // Fanotify (prevent filesystem monitoring)
+        "fanotify_init", "fanotify_mark",
+        
+        // Name to handle conversion (prevent filesystem bypass)
+        "name_to_handle_at", "open_by_handle_at",
+        
+        // Sync operations that could cause DoS
+        "sync", "syncfs",
+        
+        // Resource limit manipulation
+        "prlimit64", // setrlimit is allowed but prlimit64 can affect other processes
+        
+        // Memory mapping with dangerous flags
+        "remap_file_pages", "mremap", // mremap can be dangerous
+        
+        // File descriptor manipulation that could be dangerous
+        "sendfile", "sendfile64", "splice", "tee", "vmsplice",
+        
+        // Filesystem-specific operations
+        "fallocate", "fadvise64", "readahead",
+        
+        // Clock manipulation
+        "clock_adjtime",
+        
+        // Memory protection bypass attempts
+        "pkey_alloc", "pkey_free", "pkey_mprotect",
+        
+        // Virtualization (prevent VM escape)
+        "vm86", "vm86old",
+        
+        // Architecture-specific dangerous syscalls
         "modify_ldt", "arch_prctl", // Some arch_prctl operations are dangerous
         
         // File locking (can be used for DoS)
@@ -468,6 +619,214 @@ pub fn get_dangerous_syscalls() -> Vec<&'static str> {
 /// Test helper to check if seccomp is supported on the current system
 pub fn is_seccomp_supported() -> bool {
     ScmpFilterContext::new_filter(ScmpAction::Allow).is_ok()
+}
+/// Native seccomp implementation as fallback when libseccomp is not available
+/// This provides basic syscall filtering using the seccomp(2) system call directly
+pub mod native {
+    use crate::types::{Result, IsolateError};
+    use std::mem;
+    use libc::{c_int, c_long, c_uint, c_void};
+
+    // Seccomp constants
+    const SECCOMP_SET_MODE_FILTER: c_uint = 1;
+    const SECCOMP_FILTER_FLAG_TSYNC: c_uint = 1;
+    
+    // BPF constants
+    const BPF_LD: u16 = 0x00;
+    const BPF_W: u16 = 0x00;
+    const BPF_ABS: u16 = 0x20;
+    const BPF_JMP: u16 = 0x05;
+    const BPF_JEQ: u16 = 0x10;
+    const BPF_JGE: u16 = 0x30;
+    const BPF_RET: u16 = 0x06;
+    const BPF_K: u16 = 0x00;
+
+    // Seccomp return values
+    const SECCOMP_RET_KILL_PROCESS: u32 = 0x80000000;
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff0000;
+
+    #[repr(C)]
+    struct sock_filter {
+        code: u16,
+        jt: u8,
+        jf: u8,
+        k: u32,
+    }
+
+    #[repr(C)]
+    struct sock_fprog {
+        len: u16,
+        filter: *const sock_filter,
+    }
+
+    extern "C" {
+        fn syscall(number: c_long, ...) -> c_long;
+        fn prctl(option: c_int, arg2: c_long, arg3: c_long, arg4: c_long, arg5: c_long) -> c_int;
+    }
+
+    /// Apply a basic seccomp filter that blocks dangerous syscalls
+    pub fn apply_basic_filter() -> Result<()> {
+        // Define a basic BPF program that allows most syscalls but blocks dangerous ones
+        let filter_program = vec![
+            // Load syscall number
+            sock_filter {
+                code: BPF_LD | BPF_W | BPF_ABS,
+                jt: 0,
+                jf: 0,
+                k: 0, // offsetof(struct seccomp_data, nr)
+            },
+            
+            // Block socket syscall (41 on x86_64)
+            sock_filter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 7, // Jump to kill if equal
+                jf: 0,
+                k: 41,
+            },
+            
+            // Block fork syscall (57 on x86_64)
+            sock_filter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 6,
+                jf: 0,
+                k: 57,
+            },
+            
+            // Block execve syscall (59 on x86_64)
+            sock_filter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 5,
+                jf: 0,
+                k: 59,
+            },
+            
+            // Block ptrace syscall (101 on x86_64)
+            sock_filter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 4,
+                jf: 0,
+                k: 101,
+            },
+            
+            // Block mount syscall (165 on x86_64)
+            sock_filter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 3,
+                jf: 0,
+                k: 165,
+            },
+            
+            // Block setuid syscall (105 on x86_64)
+            sock_filter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: 2,
+                jf: 0,
+                k: 105,
+            },
+            
+            // Allow all other syscalls
+            sock_filter {
+                code: BPF_RET | BPF_K,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_ALLOW,
+            },
+            
+            // Kill process for blocked syscalls
+            sock_filter {
+                code: BPF_RET | BPF_K,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_KILL_PROCESS,
+            },
+        ];
+
+        let prog = sock_fprog {
+            len: filter_program.len() as u16,
+            filter: filter_program.as_ptr(),
+        };
+
+        // Set no new privileges first
+        unsafe {
+            if prctl(38, 1, 0, 0, 0) != 0 { // PR_SET_NO_NEW_PRIVS = 38
+                return Err(IsolateError::Config("Failed to set no new privileges".to_string()));
+            }
+        }
+
+        // Apply the seccomp filter
+        unsafe {
+            let result = syscall(
+                317, // __NR_seccomp on x86_64
+                SECCOMP_SET_MODE_FILTER as c_long,
+                SECCOMP_FILTER_FLAG_TSYNC as c_long,
+                &prog as *const sock_fprog as *const c_void as c_long,
+            );
+            
+            if result != 0 {
+                return Err(IsolateError::Config("Failed to apply native seccomp filter".to_string()));
+            }
+        }
+
+        log::info!("Applied native seccomp filter successfully");
+        Ok(())
+    }
+
+    /// Check if native seccomp is supported
+    pub fn is_supported() -> bool {
+        // Try to check if seccomp is available by reading /proc/sys/kernel/seccomp
+        std::fs::read_to_string("/proc/sys/kernel/seccomp")
+            .map(|content| content.trim() != "0")
+            .unwrap_or(false)
+    }
+}
+
+/// Enhanced seccomp support detection with fallback options
+pub fn is_seccomp_available() -> bool {
+    // First try libseccomp
+    if is_seccomp_supported() {
+        return true;
+    }
+    
+    // Fall back to native seccomp
+    native::is_supported()
+}
+
+/// Apply seccomp filtering with automatic fallback
+pub fn apply_seccomp_with_fallback(filter: &SeccompFilter, strict_mode: bool) -> Result<()> {
+    // Try libseccomp first
+    match filter.apply() {
+        Ok(()) => {
+            log::info!("Applied libseccomp filter successfully");
+            return Ok(());
+        }
+        Err(e) => {
+            log::warn!("libseccomp failed: {}, trying native fallback", e);
+        }
+    }
+    
+    // Try native seccomp as fallback
+    if native::is_supported() {
+        match native::apply_basic_filter() {
+            Ok(()) => {
+                log::info!("Applied native seccomp filter as fallback");
+                return Ok(());
+            }
+            Err(e) => {
+                log::warn!("Native seccomp also failed: {}", e);
+            }
+        }
+    }
+    
+    // If strict mode, fail completely
+    if strict_mode {
+        return Err(IsolateError::Config(
+            "Seccomp filtering required in strict mode but no implementation available".to_string()
+        ));
+    }
+    
+    // Otherwise, warn and continue
+    log::warn!("No seccomp implementation available - running without syscall filtering");
+    Ok(())
 }
 
 #[cfg(test)]

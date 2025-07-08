@@ -158,6 +158,22 @@ impl ProcessExecutor {
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("setrlimit failed: {}", e)))?;
                 }
 
+                // Apply seccomp filtering if enabled (before dropping privileges)
+                if config_clone.enable_seccomp {
+                    let filter = if let Some(ref profile) = config_clone.seccomp_profile {
+                        crate::seccomp::SeccompFilter::new_for_language(profile)
+                    } else {
+                        crate::seccomp::SeccompFilter::new_for_anonymous_code()
+                    };
+                    
+                    if let Err(e) = crate::seccomp::apply_seccomp_with_fallback(&filter, config_clone.strict_mode) {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            format!("Failed to apply seccomp filter: {}", e)
+                        ));
+                    }
+                }
+
                 // Drop privileges if uid/gid specified (requires root to start)
                 if let Some(gid) = config_clone.gid {
                     if libc::setgid(gid) != 0 {

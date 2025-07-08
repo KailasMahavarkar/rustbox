@@ -373,21 +373,55 @@ impl MultiProcessExecutor {
 
     /// Apply seccomp filtering based on configuration
     fn apply_seccomp_filtering(&self, config: &IsolateConfig) -> Result<()> {
-        if crate::seccomp::is_seccomp_supported() {
-            let filter = if let Some(ref profile) = config.seccomp_profile {
-                crate::seccomp::SeccompFilter::new_for_language(profile)
+        // Check if seccomp is supported
+        if !crate::seccomp::is_seccomp_supported() {
+            if config.strict_mode {
+                log::error!("Seccomp not supported but strict mode enabled");
+                return Err(IsolateError::Config(
+                    "Seccomp filtering is required in strict mode but not supported on this system".to_string(),
+                ));
             } else {
-                crate::seccomp::SeccompFilter::new_for_anonymous_code()
-            };
-            filter.apply()?;
-            log::info!("Applied libseccomp filter successfully");
-        } else {
-            log::error!("No seccomp support available - this is a security risk!");
-            return Err(IsolateError::Config(
-                "Seccomp filtering is required but not supported on this system".to_string(),
-            ));
+                log::warn!("Seccomp not supported - running without syscall filtering (security risk)");
+                return Ok(());
+            }
         }
-        Ok(())
+
+        // Create appropriate filter based on configuration
+        let mut filter = if let Some(ref profile) = config.seccomp_profile {
+            log::info!("Creating seccomp filter for language: {}", profile);
+            crate::seccomp::SeccompFilter::new_for_language(profile)
+        } else {
+            log::info!("Creating default seccomp filter for anonymous code");
+            crate::seccomp::SeccompFilter::new_for_anonymous_code()
+        };
+
+        // Apply additional restrictions if in strict mode
+        if config.strict_mode {
+            filter.set_audit_enabled(true);
+            // Remove potentially dangerous syscalls even from language profiles
+            filter.deny_syscall("ptrace");
+            filter.deny_syscall("process_vm_readv");
+            filter.deny_syscall("process_vm_writev");
+            log::info!("Applied strict mode restrictions to seccomp filter");
+        }
+
+        // Apply the filter
+        match filter.apply() {
+            Ok(()) => {
+                log::info!("Seccomp filter applied successfully with {} allowed syscalls", 
+                          filter.get_allowed_syscalls().len());
+                Ok(())
+            }
+            Err(e) => {
+                if config.strict_mode {
+                    log::error!("Failed to apply seccomp filter in strict mode: {}", e);
+                    Err(e)
+                } else {
+                    log::warn!("Failed to apply seccomp filter, continuing without it: {}", e);
+                    Ok(())
+                }
+            }
+        }
     }
 
     /// Apply no-new-privs flag
