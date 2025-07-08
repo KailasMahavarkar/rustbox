@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/antinomyhq/forge/refs/heads/main/forge.schema.json
 variables:
-  mode: ACT
   operating_agent: forge
-model: google/gemini-2.5-pro-preview
+  mode: ACT
+model: anthropic/claude-sonnet-4

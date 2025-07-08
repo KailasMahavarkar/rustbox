@@ -144,7 +144,7 @@ test_privilege_dropping_security() {
     local result
     result=$(sudo "$MINI_ISOLATE" run --box-id "$test_box" --as-uid $test_uid --silent cat -- /etc/shadow 2>&1 || echo "PERMISSION_DENIED")
     
-    if [[ "$result" == "PERMISSION_DENIED" ]] || echo "$result" | grep -q "Permission denied"; then
+    if echo "$result" | grep -q "PERMISSION_DENIED"; then
         log_success "Privilege dropping security works correctly (no root access)"
         return 0
     else

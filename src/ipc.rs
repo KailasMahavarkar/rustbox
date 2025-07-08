@@ -150,8 +150,8 @@ impl ErrorPipe {
 
     /// Send an error message
     pub fn send_error(&mut self, error: &str) -> Result<()> {
-        let message = IpcMessage::ProcessError {
-            error: error.to_string(),
+        let message = IpcMessage::Error {
+            message: error.to_string(),
         };
         self.channel.send(&message)
     }
@@ -159,7 +159,7 @@ impl ErrorPipe {
     /// Try to receive an error message
     pub fn try_recv_error(&mut self) -> Result<Option<String>> {
         match self.channel.try_recv()? {
-            Some(IpcMessage::ProcessError { error }) => Ok(Some(error)),
+            Some(IpcMessage::Error { message }) => Ok(Some(message)),
             Some(_) => Ok(None), // Ignore non-error messages
             None => Ok(None),
         }
