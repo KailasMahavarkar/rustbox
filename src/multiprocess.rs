@@ -80,11 +80,11 @@ impl MultiProcessExecutor {
 
         // Start keeper process for external monitoring
         let keeper_pid = self.start_keeper_process()?;
-        self.cleanup_manager.register_process(Pid::from_raw(keeper_pid as i32), ProcessType::Keeper);
+        
 
         // Start proxy process for namespace management
         let proxy_pid = self.start_proxy_process(command, stdin_data)?;
-        self.cleanup_manager.register_process(Pid::from_raw(proxy_pid as i32), ProcessType::Proxy);
+        
 
         // Monitor execution and collect results
         self.monitor_execution(start_time)
@@ -401,7 +401,7 @@ impl MultiProcessExecutor {
     fn cleanup_processes(&mut self) -> Result<()> {
         // Use a reasonable timeout for graceful cleanup
         let cleanup_timeout = Duration::from_secs(2); 
-        self.cleanup_manager.graceful_cleanup(cleanup_timeout)?;
+        
 
         // Delete cgroup after processes are terminated
         if let Some(cgroup) = &self.cgroup {

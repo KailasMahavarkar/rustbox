@@ -3,7 +3,7 @@
 # rustbox Comprehensive Test Runner
 # Uses the organized test directory structure with category-based testing
 
-set -e
+#set -e
 
 # Colors for output
 RED='\033[0;31m'
@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS_DIR="$SCRIPT_DIR/tests"
-VERBOSE=false
+VERBOSE=true
 RUN_PRIVILEGED=false
 SPECIFIC_CATEGORY=""
 SPECIFIC_TEST=""

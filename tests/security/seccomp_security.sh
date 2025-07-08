@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 # Test configuration
 TEST_DIR="/tmp/rustbox_seccomp_tests_$$"
-RUSTBOX_BIN="./target/debug/rustbox"
+RUSTBOX_BIN="./target/release/rustbox"
 PASSED=0
 FAILED=0
 TOTAL=0

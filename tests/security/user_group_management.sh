@@ -47,7 +47,8 @@ test_basic_uid_privilege_dropping() {
     log_info "Testing basic UID privilege dropping..."
     
     local test_box="${TEST_PREFIX}_uid_basic"
-    local test_uid=1000  # Typically 'user' on most systems
+        local test_uid=$(id -u)
+    local test_gid=$(id -g)
     
     log_info "Using test box: $test_box, UID: $test_uid"
     
@@ -80,7 +81,7 @@ test_basic_gid_privilege_dropping() {
     log_info "Testing basic GID privilege dropping..."
     
     local test_box="${TEST_PREFIX}_gid_basic"
-    local test_gid=1000  # Typically 'user' group on most systems
+    
     
     # Initialize test environment  
     sudo "$MINI_ISOLATE" init --box-id "$test_box" --time 5 --mem 64 2>/dev/null || return 1
