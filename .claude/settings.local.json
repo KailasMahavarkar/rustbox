@@ -47,7 +47,18 @@
       "Bash(go:*)",
       "Bash(/dev/null)",
       "Bash(./run_tests.sh)",
-      "Bash(./run_tests.sh:*)"
+      "Bash(./run_tests.sh:*)",
+      "Bash(echo \"Exit code: $?\")",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)",
+      "Read(//tmp/**)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"

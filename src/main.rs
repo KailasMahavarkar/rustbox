@@ -215,40 +215,235 @@ fn main() -> Result<()> {
                 isolate.add_directory_bindings(bindings)?;
             }
 
-            if command.len() == 1 && std::path::Path::new(&command[0]).exists() {
-                // Single argument that's a file path - execute the file
-                let file_path = std::path::Path::new(&command[0]);
-                let result = isolate.execute_file_with_overrides(
-                    file_path,
-                    None, // stdin
-                    cpu,
-                    mem,
-                    time.or(wall_time),
-                    None, // fd_limit
-                )?;
+            if command.is_empty() {
+                // No command specified - look for standardized pattern /tmp/<box-id>.py in sandbox
+                let standard_filename = format!("{}.py", box_id);
+                let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                let standard_path = sandbox_work_dir.join(&standard_filename);
                 
-                // Print execution results in JSON format
-                let status_message = match result.status {
-                    crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
-                    crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
-                    _ => format!("{:?}", result.status),
-                };
+                if standard_path.exists() {
+                    eprintln!("Executing standardized file: {}", standard_filename);
+                    let result = isolate.execute_file_with_overrides(
+                        &standard_path,
+                        None, // stdin
+                        cpu,
+                        mem,
+                        time.or(wall_time),
+                        None, // fd_limit
+                    )?;
+                    
+                    // Print execution results
+                    let status_message = match result.status {
+                        crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
+                        crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
+                        _ => format!("{:?}", result.status),
+                    };
+                    
+                    let json_result = serde_json::json!({
+                        "status": status_message,
+                        "exit_code": result.exit_code,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                        "wall_time": result.wall_time,
+                        "cpu_time": result.cpu_time,
+                        "memory_peak_kb": result.memory_peak / 1024,
+                        "success": result.success,
+                        "signal": result.signal,
+                        "error_message": result.error_message
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
+                    
+                    // Automatic cleanup after execution (no command specified path)
+                    let cleanup_result = isolate.cleanup();
+                    match cleanup_result {
+                        Ok(_) => {
+                            // Also clean up the standardized files we created
+                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                            if sandbox_work_dir.exists() {
+                                if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
+                                    eprintln!("Warning: Failed to remove sandbox files {}: {}", sandbox_work_dir.display(), e);
+                                } else {
+                                    eprintln!("Automatically cleaned up sandbox {} files and instance", box_id);
+                                }
+                            } else {
+                                eprintln!("Automatically cleaned up sandbox {} after execution", box_id);
+                            }
+                        },
+                        Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
+                    }
+                    
+                    if !result.success {
+                        std::process::exit(1);
+                    }
+                } else {
+                    eprintln!("Error: No command specified and standardized file {} not found in sandbox", standard_filename);
+                    eprintln!("Usage: rustbox run --box-id {} <filename> or ensure {} exists in sandbox /tmp/", box_id, standard_filename);
+                    std::process::exit(1);
+                }
+            } else if command.len() == 1 {
+                let command_arg = &command[0];
+                let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let source_path = current_dir.join(command_arg);
                 
-                let json_result = serde_json::json!({
-                    "status": status_message,
-                    "exit_code": result.exit_code,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                    "wall_time": result.wall_time,
-                    "cpu_time": result.cpu_time,
-                    "memory_peak_kb": result.memory_peak / 1024,
-                    "success": result.success,
-                    "signal": result.signal,
-                    "error_message": result.error_message
-                });
-                println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
-                
-                if !result.success {
+                // Check if file exists in current directory, copy to standardized location in sandbox
+                if source_path.exists() {
+                    let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                    
+                    // Ensure sandbox work directory exists
+                    if !sandbox_work_dir.exists() {
+                        std::fs::create_dir_all(&sandbox_work_dir)
+                            .map_err(|e| anyhow::anyhow!("Failed to create sandbox work directory: {}", e))?;
+                    }
+                    
+                    // Determine file extension and create standardized name
+                    let extension = source_path.extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("py"); // default to .py
+                    let standardized_name = format!("{}.{}", box_id, extension);
+                    let dest_path = sandbox_work_dir.join(&standardized_name);
+                    
+                    // Check if standardized file already exists (conflict detection)
+                    if dest_path.exists() {
+                        eprintln!("Error: Standardized file {} already exists in sandbox {}", standardized_name, box_id);
+                        eprintln!("This indicates another user/process has already initialized this box-id with a file.");
+                        eprintln!("Please use a different box-id or clean up the existing sandbox first.");
+                        eprintln!("To cleanup: rustbox cleanup --box-id {}", box_id);
+                        std::process::exit(1);
+                    }
+                    
+                    // Also create the standard /tmp location inside the sandbox
+                    let sandbox_tmp_dir = sandbox_work_dir.join("tmp");
+                    std::fs::create_dir_all(&sandbox_tmp_dir)
+                        .map_err(|e| anyhow::anyhow!("Failed to create sandbox /tmp directory: {}", e))?;
+                    let internal_dest_path = sandbox_tmp_dir.join(&standardized_name);
+                    
+                    // Check internal path conflict as well
+                    if internal_dest_path.exists() {
+                        eprintln!("Error: Internal standardized file /tmp/{} already exists in sandbox {}", standardized_name, box_id);
+                        eprintln!("This indicates another user/process has already initialized this box-id with a file.");
+                        eprintln!("Please use a different box-id or clean up the existing sandbox first.");
+                        eprintln!("To cleanup: rustbox cleanup --box-id {}", box_id);
+                        std::process::exit(1);
+                    }
+                    
+                    // Copy file to both locations (work dir and /tmp inside sandbox)
+                    std::fs::copy(&source_path, &dest_path)
+                        .map_err(|e| anyhow::anyhow!("Failed to copy file to sandbox work directory: {}", e))?;
+                    std::fs::copy(&source_path, &internal_dest_path)
+                        .map_err(|e| anyhow::anyhow!("Failed to copy file to sandbox /tmp: {}", e))?;
+                    
+                    eprintln!("Copied {} to sandbox as {}", command_arg, standardized_name);
+                    eprintln!("File available at: /tmp/{} inside sandbox", standardized_name);
+                    
+                    // Execute the copied file using the standardized path
+                    let result = isolate.execute_file_with_overrides(
+                        &dest_path,
+                        None, // stdin
+                        cpu,
+                        mem,
+                        time.or(wall_time),
+                        None, // fd_limit
+                    )?;
+                    
+                    // Print execution results in JSON format
+                    let status_message = match result.status {
+                        crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
+                        crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
+                        _ => format!("{:?}", result.status),
+                    };
+                    
+                    let json_result = serde_json::json!({
+                        "status": status_message,
+                        "exit_code": result.exit_code,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                        "wall_time": result.wall_time,
+                        "cpu_time": result.cpu_time,
+                        "memory_peak_kb": result.memory_peak / 1024,
+                        "success": result.success,
+                        "signal": result.signal,
+                        "error_message": result.error_message
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
+                    
+                    // Automatic cleanup after execution (file specified path)
+                    let cleanup_result = isolate.cleanup();
+                    match cleanup_result {
+                        Ok(_) => {
+                            // Also clean up the standardized files we created
+                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                            if sandbox_work_dir.exists() {
+                                if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
+                                    eprintln!("Warning: Failed to remove sandbox files {}: {}", sandbox_work_dir.display(), e);
+                                } else {
+                                    eprintln!("Automatically cleaned up sandbox {} files and instance", box_id);
+                                }
+                            } else {
+                                eprintln!("Automatically cleaned up sandbox {} after execution", box_id);
+                            }
+                        },
+                        Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
+                    }
+                    
+                    if !result.success {
+                        std::process::exit(1);
+                    }
+                } else if std::path::Path::new(command_arg).exists() {
+                    // File exists as absolute path - execute directly  
+                    let result = isolate.execute_file_with_overrides(
+                        std::path::Path::new(command_arg),
+                        None, // stdin
+                        cpu,
+                        mem,
+                        time.or(wall_time),
+                        None, // fd_limit
+                    )?;
+                    
+                    // Print execution results in JSON format
+                    let status_message = match result.status {
+                        crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
+                        crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
+                        _ => format!("{:?}", result.status),
+                    };
+                    
+                    let json_result = serde_json::json!({
+                        "status": status_message,
+                        "exit_code": result.exit_code,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                        "wall_time": result.wall_time,
+                        "cpu_time": result.cpu_time,
+                        "memory_peak_kb": result.memory_peak / 1024,
+                        "success": result.success,
+                        "signal": result.signal,
+                        "error_message": result.error_message
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
+                    
+                    // Automatic cleanup after execution (absolute path)
+                    let cleanup_result = isolate.cleanup();
+                    match cleanup_result {
+                        Ok(_) => {
+                            // Also clean up the standardized files we created
+                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                            if sandbox_work_dir.exists() {
+                                if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
+                                    eprintln!("Warning: Failed to remove sandbox files {}: {}", sandbox_work_dir.display(), e);
+                                } else {
+                                    eprintln!("Automatically cleaned up sandbox {} files and instance", box_id);
+                                }
+                            } else {
+                                eprintln!("Automatically cleaned up sandbox {} after execution", box_id);
+                            }
+                        },
+                        Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
+                    }
+                    
+                    if !result.success {
+                        std::process::exit(1);
+                    }
+                } else {
+                    eprintln!("Error: File '{}' not found in current directory or as absolute path", command_arg);
                     std::process::exit(1);
                 }
             } else {
@@ -282,6 +477,25 @@ fn main() -> Result<()> {
                     "error_message": result.error_message
                 });
                 println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
+                
+                // Automatic cleanup after execution (multiple arguments path)
+                let cleanup_result = isolate.cleanup();
+                match cleanup_result {
+                    Ok(_) => {
+                        // Also clean up the standardized files we created (if any)
+                        let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                        if sandbox_work_dir.exists() {
+                            if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
+                                eprintln!("Warning: Failed to remove sandbox files {}: {}", sandbox_work_dir.display(), e);
+                            } else {
+                                eprintln!("Automatically cleaned up sandbox {} files and instance", box_id);
+                            }
+                        } else {
+                            eprintln!("Automatically cleaned up sandbox {} after execution", box_id);
+                        }
+                    },
+                    Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
+                }
                 
                 if !result.success {
                     std::process::exit(1);
