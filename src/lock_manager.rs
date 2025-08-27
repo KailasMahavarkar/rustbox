@@ -87,7 +87,10 @@ impl BoxLockManager {
             })?;
 
         // Acquire exclusive lock (non-blocking to detect busy state)
+        #[cfg(unix)]
         let flock_result = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB) };
+        #[cfg(not(unix))]
+        let flock_result = 0; // Always succeed on non-Unix systems
         if flock_result != 0 {
             let errno = std::io::Error::last_os_error();
             return match errno.raw_os_error() {

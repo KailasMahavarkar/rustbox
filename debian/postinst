@@ -1,0 +1,35 @@
+#!/bin/bash
+set -e
+
+# Create rustbox user and group if they don't exist
+if ! getent group rustbox >/dev/null; then
+    addgroup --system rustbox
+fi
+
+if ! getent passwd rustbox >/dev/null; then
+    adduser --system --home /var/lib/rustbox --shell /bin/false --ingroup rustbox rustbox
+fi
+
+# Create necessary directories
+mkdir -p /var/lib/rustbox
+mkdir -p /var/log/rustbox
+mkdir -p /etc/rustbox
+mkdir -p /tmp/rustbox-locks
+
+# Set ownership and permissions
+chown rustbox:rustbox /var/lib/rustbox
+chown rustbox:rustbox /var/log/rustbox
+chown root:rustbox /etc/rustbox
+chown rustbox:rustbox /tmp/rustbox-locks
+
+chmod 755 /var/lib/rustbox
+chmod 755 /var/log/rustbox
+chmod 750 /etc/rustbox
+chmod 755 /tmp/rustbox-locks
+
+# Set up systemd
+systemctl daemon-reload
+systemctl enable rustbox.service
+
+echo "rustbox installation completed."
+echo "Run 'systemctl start rustbox' to start the service."

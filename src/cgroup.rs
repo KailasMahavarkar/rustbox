@@ -14,8 +14,10 @@ pub struct Cgroup {
 
 impl Cgroup {
     pub fn new(name: &str, strict_mode: bool) -> Result<Self> {
+        // Sanitize the name by replacing forward slashes with underscores
+        let sanitized_name = name.replace("/", "_");
         let cgroup_base = "/sys/fs/cgroup";
-        let cgroup_path = Path::new(cgroup_base).join("memory").join(name);
+        let cgroup_path = Path::new(cgroup_base).join("memory").join(&sanitized_name);
 
         let cgroups_available = Self::cgroups_available();
         if !cgroups_available {
@@ -26,7 +28,7 @@ impl Cgroup {
             } else {
                 eprintln!("Warning: Cgroups not available. Resource limits will not be enforced.");
                 return Ok(Self {
-                    name: name.to_string(),
+                    name: name.replace("/", "_"),
                     cgroup_path: PathBuf::new(),
                     available_controllers: HashSet::new(),
                     has_cgroup_support: false,
@@ -71,7 +73,7 @@ impl Cgroup {
                 } else {
                     eprintln!("Warning: Cannot create cgroup (permission denied). Resource limits will not be enforced.");
                     return Ok(Self {
-                        name: name.to_string(),
+                        name: name.replace("/", "_"),
                         cgroup_path: PathBuf::new(),
                         available_controllers,
                         has_cgroup_support: false,
@@ -85,7 +87,7 @@ impl Cgroup {
                 } else {
                     eprintln!("Warning: {}", error_msg);
                     return Ok(Self {
-                        name: name.to_string(),
+                        name: name.replace("/", "_"),
                         cgroup_path: PathBuf::new(),
                         available_controllers,
                         has_cgroup_support: false,
@@ -95,7 +97,7 @@ impl Cgroup {
         }
 
         Ok(Self {
-            name: name.to_string(),
+            name: sanitized_name.clone(),
             cgroup_path,
             available_controllers,
             has_cgroup_support: true,
@@ -221,11 +223,89 @@ impl Cgroup {
             .map_err(|e| IsolateError::Cgroup(format!("Failed to parse peak memory usage: {}", e)))
     }
 
+    /// Get current memory usage (more reliable than peak for live monitoring)
+    pub fn get_current_memory_usage(&self) -> Result<u64> {
+        if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
+            return Ok(0);
+        }
+
+        let usage = self.read_cgroup_file("memory.usage_in_bytes")?;
+        usage
+            .trim()
+            .parse()
+            .map_err(|e| IsolateError::Cgroup(format!("Failed to parse current memory usage: {}", e)))
+    }
+
+    /// Get comprehensive memory statistics from cgroup
+    pub fn get_memory_stats(&self) -> Result<(u64, u64, u64)> {
+        if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
+            return Ok((0, 0, 0));
+        }
+
+        let current = self.get_current_memory_usage().unwrap_or(0);
+        let peak = self.get_peak_memory_usage().unwrap_or(0);
+        
+        // Try to get memory limit
+        let limit = self.read_cgroup_file("memory.limit_in_bytes")
+            .and_then(|s| s.trim().parse::<u64>().map_err(|e| IsolateError::Cgroup(e.to_string())))
+            .unwrap_or(u64::MAX);
+
+        Ok((current, peak, limit))
+    }
+
+    /// Check if the process hit the memory limit (OOM condition)
+    pub fn check_oom_killed(&self) -> bool {
+        if !self.has_cgroup_support || !self.available_controllers.contains("memory") {
+            return false;
+        }
+
+        // Check memory.oom_control for under_oom flag
+        if let Ok(oom_control) = self.read_cgroup_file("memory.oom_control") {
+            if oom_control.contains("under_oom 1") {
+                return true;
+            }
+        }
+
+        // Also check memory.stat for oom_kill events
+        if let Ok(memory_stat) = self.read_cgroup_file("memory.stat") {
+            for line in memory_stat.lines() {
+                if line.starts_with("oom_kill ") || line.starts_with("oom ") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(count) = parts[1].parse::<u64>() {
+                            if count > 0 {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check if current memory usage equals the limit (potential OOM)
+        if let (Ok(limit), Ok(usage)) = (
+            self.read_cgroup_file("memory.limit_in_bytes").and_then(|s| {
+                s.trim().parse::<u64>().map_err(|e| IsolateError::Cgroup(e.to_string()))
+            }),
+            self.read_cgroup_file("memory.usage_in_bytes").and_then(|s| {
+                s.trim().parse::<u64>().map_err(|e| IsolateError::Cgroup(e.to_string()))
+            })
+        ) {
+            // If usage is very close to limit (within 1MB), consider it OOM
+            if limit > 0 && usage >= limit.saturating_sub(1024 * 1024) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     pub fn get_cpu_usage(&self) -> Result<f64> {
         if !self.has_cgroup_support || !self.available_controllers.contains("cpuacct") {
             return Ok(0.0);
         }
 
+        // Method 1: Try cpuacct.usage (nanoseconds, most accurate)
         let cpuacct_usage_path = Path::new("/sys/fs/cgroup/cpuacct")
             .join(&self.name)
             .join("cpuacct.usage");
@@ -233,14 +313,13 @@ impl Cgroup {
         if cpuacct_usage_path.exists() {
             if let Ok(usage_content) = fs::read_to_string(&cpuacct_usage_path) {
                 if let Ok(usage_ns) = usage_content.trim().parse::<u64>() {
-                    if usage_ns > 0 {
-                        let cpu_time = usage_ns as f64 / 1_000_000_000.0;
-                        return Ok(cpu_time);
-                    }
+                    let cpu_time = usage_ns as f64 / 1_000_000_000.0;
+                    return Ok(cpu_time);
                 }
             }
         }
 
+        // Method 2: Try cpuacct.stat (USER_HZ units, fallback)
         let cpuacct_stat_path = Path::new("/sys/fs/cgroup/cpuacct")
             .join(&self.name)
             .join("cpuacct.stat");
@@ -267,6 +346,7 @@ impl Cgroup {
 
                 if user_time > 0 || sys_time > 0 {
                     let total_time = user_time + sys_time;
+                    // Convert USER_HZ to seconds (typically USER_HZ = 100)
                     let cpu_time = total_time as f64 / 100.0;
                     return Ok(cpu_time);
                 }
@@ -274,6 +354,33 @@ impl Cgroup {
         }
 
         Ok(0.0)
+    }
+
+    /// Get comprehensive resource usage statistics from cgroups exclusively
+    pub fn get_resource_stats(&self) -> (f64, u64, bool) {
+        let cpu_time = self.get_cpu_usage().unwrap_or(0.0);
+        let memory_peak = self.get_peak_memory_usage().unwrap_or(0);
+        let oom_killed = self.check_oom_killed();
+        
+        (cpu_time, memory_peak, oom_killed)
+    }
+
+    /// Check if cgroup is in a resource limit violation state
+    pub fn is_resource_limited(&self) -> (bool, bool) {
+        let oom_killed = self.check_oom_killed();
+        
+        // Check if memory usage is at or near limit
+        let memory_limited = if let (Ok(current), Ok(limit)) = (
+            self.get_current_memory_usage(),
+            self.read_cgroup_file("memory.limit_in_bytes")
+                .and_then(|s| s.trim().parse::<u64>().map_err(|e| IsolateError::Cgroup(e.to_string())))
+        ) {
+            limit > 0 && current >= limit.saturating_sub(1024 * 1024) // Within 1MB of limit
+        } else {
+            false
+        };
+        
+        (oom_killed || memory_limited, false) // (memory_limited, cpu_limited)
     }
 
     pub fn cleanup(&self) -> Result<()> {

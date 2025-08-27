@@ -1,0 +1,27 @@
+[Unit]
+Description=rustbox container slice
+Documentation=man:systemd.slice(5)
+Before=slices.target
+
+[Slice]
+# Resource limits for all rustbox containers
+MemoryAccounting=yes
+CPUAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
+
+# Default limits (can be overridden per container)
+MemoryHigh=1G
+MemoryMax=1.5G
+CPUQuota=200%
+TasksMax=1024
+
+# Network and device restrictions
+DevicePolicy=closed
+DeviceAllow=/dev/null rw
+DeviceAllow=/dev/zero rw
+DeviceAllow=/dev/urandom r
+
+# Additional security
+RestrictNamespaces=yes
+PrivateUsers=yes

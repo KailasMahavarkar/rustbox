@@ -153,7 +153,6 @@ Process cleanup and resource management:
 - **System Dependencies**: 
   - Linux kernel with cgroups v1 support
   - Namespace support
-  - Seccomp support
   - Python 3 (for stress tests)
 - **rustbox Binary**: Must be built at `../target/release/rustbox`
 

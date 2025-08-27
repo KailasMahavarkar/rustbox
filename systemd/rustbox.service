@@ -1,0 +1,40 @@
+[Unit]
+Description=rustbox isolation service manager
+Documentation=man:rustbox(1)
+After=network.target
+
+[Service]
+Type=notify
+User=rustbox
+Group=rustbox
+ExecStart=/usr/bin/rustbox daemon
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+KillSignal=SIGTERM
+SendSIGKILL=yes
+Slice=rustbox.slice
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictNamespaces=~CLONE_NEWUSER
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

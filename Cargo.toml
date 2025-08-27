@@ -5,12 +5,14 @@ edition = "2021"
 authors = ["Your Name <your.email@example.com>"]
 description = "A process isolation and resource control system inspired by IOI Isolate"
 
+[[bin]]
+name = "rustbox"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-nix = "0.27"
-prctl = "1.0"
 uuid = { version = "1.6", features = ["v4"] }
 tempfile = "3.8"
 chrono = { version = "0.4", features = ["serde"] }
@@ -18,23 +20,39 @@ anyhow = "1.0"
 thiserror = "1.0"
 env_logger = "0.10"
 log = "0.4"
+# Unix-only dependencies  
+nix = { version = "0.27", features = ["process", "signal", "fs", "user", "sched", "mount", "resource", "hostname"] }
+libc = "0.2"
 
 [features]
 default = []
-seccomp = []
-
-# Platform-specific dependencies
-[target.'cfg(unix)'.dependencies]
-nix = { version = "0.27", features = ["process", "signal", "fs", "user", "sched", "mount", "resource"] }
-libc = "0.2"
-libseccomp = { version = "0.3" }
-caps = "0.5"
-
-[target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["processthreadsapi", "handleapi", "synchapi"] }
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
 tempfile = "3.8"
 serial_test = "3.0"
 assert_cmd = "2.0"
 predicates = "3.0"
+# cargo-deb = "2.0"
+
+[package.metadata.deb]
+maintainer = "rustbox team <rustbox@example.com>"
+copyright = "2024, rustbox developers"
+license-file = ["LICENSE", "4"]
+extended-description = """\
+A secure process isolation and resource control system for running untrusted code.
+Provides comprehensive sandbox capabilities including:
+- Filesystem isolation with chroot
+- Network and process namespace isolation  
+- Resource limits (memory, CPU, file descriptors)
+- Cgroups-based resource enforcement
+"""
+depends = "$auto, systemd"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/rustbox", "usr/bin/", "755"],
+    ["systemd/rustbox.service", "etc/systemd/system/", "644"],
+    ["systemd/rustbox.slice", "etc/systemd/system/", "644"],
+]
+maintainer-scripts = "debian/"
+systemd-units = { enable = false }

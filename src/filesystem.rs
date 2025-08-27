@@ -31,9 +31,178 @@ impl FilesystemSecurity {
     pub fn setup_isolation(&self) -> Result<()> {
         if let Some(ref chroot_path) = self.chroot_dir {
             self.setup_chroot_jail(chroot_path)?;
+            self.setup_hardened_mounts(chroot_path)?;
         }
         
         self.setup_workdir()?;
+        Ok(())
+    }
+
+    /// Setup directory bindings for the sandbox
+    pub fn setup_directory_bindings(&self, bindings: &[crate::types::DirectoryBinding]) -> Result<()> {
+        for binding in bindings {
+            self.setup_single_binding(binding)?;
+        }
+        Ok(())
+    }
+
+    /// Setup a single directory binding
+    #[cfg(unix)]
+    fn setup_single_binding(&self, binding: &crate::types::DirectoryBinding) -> Result<()> {
+        use crate::types::DirectoryPermissions;
+
+        // Skip if source doesn't exist and maybe flag is set
+        if binding.maybe && !binding.source.exists() {
+            log::debug!("Skipping non-existent directory binding: {}", binding.source.display());
+            return Ok(());
+        }
+
+        // Determine the actual target path within chroot or working directory
+        let target_path = if let Some(ref chroot_path) = self.chroot_dir {
+            chroot_path.join(binding.target.strip_prefix("/").unwrap_or(&binding.target))
+        } else {
+            // If no chroot, use working directory as base for relative paths
+            if binding.target.is_absolute() {
+                // For absolute paths, create under working directory to avoid permission issues
+                self.workdir.join(binding.target.strip_prefix("/").unwrap_or(&binding.target))
+            } else {
+                self.workdir.join(&binding.target)
+            }
+        };
+
+        // Create target directory if it doesn't exist
+        if let Some(parent) = target_path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    IsolateError::Config(format!("Failed to create target parent directory: {}", e))
+                })?;
+            }
+        }
+
+        if !target_path.exists() {
+            fs::create_dir_all(&target_path).map_err(|e| {
+                IsolateError::Config(format!("Failed to create target directory: {}", e))
+            })?;
+        }
+
+        // Handle temporary directory creation
+        if binding.is_tmp {
+            log::info!("Created temporary directory at {}", target_path.display());
+            return Ok(()); // No mounting needed for tmp directories
+        }
+
+        // Prepare mount flags based on permissions
+        let mut mount_flags = libc::MS_BIND;
+        
+        match binding.permissions {
+            DirectoryPermissions::ReadOnly => {
+                mount_flags |= libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV;
+            }
+            DirectoryPermissions::ReadWrite => {
+                mount_flags |= libc::MS_NOSUID | libc::MS_NODEV;
+            }
+            DirectoryPermissions::NoExec => {
+                mount_flags |= libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
+            }
+        }
+
+        // Perform bind mount
+        let source_cstr = std::ffi::CString::new(binding.source.to_string_lossy().as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid source path: {}", e)))?;
+        let target_cstr = std::ffi::CString::new(target_path.to_string_lossy().as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid target path: {}", e)))?;
+
+        let result = unsafe {
+            libc::mount(
+                source_cstr.as_ptr(),
+                target_cstr.as_ptr(),
+                std::ptr::null(),
+                mount_flags,
+                std::ptr::null(),
+            )
+        };
+
+        if result != 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if self.strict_mode {
+                return Err(IsolateError::Config(format!(
+                    "Failed to bind mount {} to {}: errno {}",
+                    binding.source.display(),
+                    target_path.display(),
+                    errno
+                )));
+            } else {
+                log::warn!(
+                    "Failed to bind mount {} to {}: errno {} (falling back to file copy)",
+                    binding.source.display(),
+                    target_path.display(),
+                    errno
+                );
+                
+                // Fallback: copy files for non-root users
+                self.copy_directory_contents(&binding.source, &target_path)?;
+                log::info!(
+                    "Copied directory contents from {} to {} (fallback mode)",
+                    binding.source.display(),
+                    target_path.display()
+                );
+            }
+        } else {
+            log::info!(
+                "Bound directory {} to {} with permissions {:?}",
+                binding.source.display(),
+                target_path.display(),
+                binding.permissions
+            );
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn setup_single_binding(&self, _binding: &crate::types::DirectoryBinding) -> Result<()> {
+        Err(IsolateError::Config(
+            "Directory binding is only supported on Unix systems".to_string(),
+        ))
+    }
+
+    /// Copy directory contents as fallback when bind mounting fails
+    fn copy_directory_contents(&self, source: &Path, target: &Path) -> Result<()> {
+        use std::fs;
+        
+        if !source.exists() {
+            return Err(IsolateError::Config(format!(
+                "Source directory does not exist: {}",
+                source.display()
+            )));
+        }
+
+        // Ensure target directory exists
+        if !target.exists() {
+            fs::create_dir_all(target).map_err(|e| {
+                IsolateError::Config(format!("Failed to create target directory: {}", e))
+            })?;
+        }
+
+        // Copy all files and subdirectories
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let filename = entry.file_name();
+            let target_path = target.join(&filename);
+
+            if source_path.is_dir() {
+                // Recursively copy subdirectories
+                self.copy_directory_contents(&source_path, &target_path)?;
+            } else if source_path.is_file() {
+                // Copy files
+                if let Some(parent) = target_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&source_path, &target_path)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -178,6 +347,195 @@ impl FilesystemSecurity {
                 "Failed to apply mount security flags: errno {}",
                 errno
             )));
+        }
+
+        Ok(())
+    }
+
+    /// Setup hardened /sys and /dev mounts within chroot
+    #[cfg(unix)]
+    fn setup_hardened_mounts(&self, chroot_path: &Path) -> Result<()> {
+        // Mount hardened /sys with read-only flags
+        let sys_path = chroot_path.join("sys");
+        if sys_path.exists() {
+            self.mount_hardened_sysfs(&sys_path)?;
+        }
+
+        // Mount hardened /dev with tmpfs and minimal devices
+        let dev_path = chroot_path.join("dev");
+        if dev_path.exists() {
+            self.mount_hardened_devfs(&dev_path)?;
+        }
+
+        // Mount hardened /proc if it exists
+        let proc_path = chroot_path.join("proc");
+        if proc_path.exists() {
+            self.mount_hardened_procfs(&proc_path)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn setup_hardened_mounts(&self, _chroot_path: &Path) -> Result<()> {
+        // No-op on non-Unix systems
+        Ok(())
+    }
+
+    /// Mount sysfs with hardened security flags
+    #[cfg(unix)]
+    fn mount_hardened_sysfs(&self, sys_path: &Path) -> Result<()> {
+        let mount_flags = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
+        
+        let source_cstr = std::ffi::CString::new("sysfs")
+            .map_err(|e| IsolateError::Config(format!("Invalid source string: {}", e)))?;
+        let target_cstr = std::ffi::CString::new(sys_path.to_string_lossy().as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid sys path: {}", e)))?;
+        let fstype_cstr = std::ffi::CString::new("sysfs")
+            .map_err(|e| IsolateError::Config(format!("Invalid fstype string: {}", e)))?;
+        
+        let result = unsafe {
+            libc::mount(
+                source_cstr.as_ptr(),
+                target_cstr.as_ptr(),
+                fstype_cstr.as_ptr(),
+                mount_flags,
+                std::ptr::null(),
+            )
+        };
+
+        if result != 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if self.strict_mode {
+                return Err(IsolateError::Config(format!(
+                    "Failed to mount hardened sysfs: errno {}",
+                    errno
+                )));
+            } else {
+                log::warn!("Failed to mount hardened sysfs: errno {}", errno);
+            }
+        } else {
+            log::info!("Mounted hardened sysfs at {}", sys_path.display());
+        }
+
+        Ok(())
+    }
+
+    /// Mount tmpfs on /dev with minimal device nodes
+    #[cfg(unix)]
+    fn mount_hardened_devfs(&self, dev_path: &Path) -> Result<()> {
+        // First mount tmpfs on dev directory
+        let mount_flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NOATIME;
+        
+        let source_cstr = std::ffi::CString::new("tmpfs")
+            .map_err(|e| IsolateError::Config(format!("Invalid source string: {}", e)))?;
+        let target_cstr = std::ffi::CString::new(dev_path.to_string_lossy().as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid dev path: {}", e)))?;
+        let fstype_cstr = std::ffi::CString::new("tmpfs")
+            .map_err(|e| IsolateError::Config(format!("Invalid fstype string: {}", e)))?;
+        let options_cstr = std::ffi::CString::new("size=64k,mode=755")
+            .map_err(|e| IsolateError::Config(format!("Invalid options string: {}", e)))?;
+        
+        let result = unsafe {
+            libc::mount(
+                source_cstr.as_ptr(),
+                target_cstr.as_ptr(),
+                fstype_cstr.as_ptr(),
+                mount_flags,
+                options_cstr.as_ptr() as *const libc::c_void,
+            )
+        };
+
+        if result != 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if self.strict_mode {
+                return Err(IsolateError::Config(format!(
+                    "Failed to mount tmpfs on /dev: errno {}",
+                    errno
+                )));
+            } else {
+                log::warn!("Failed to mount tmpfs on /dev: errno {}", errno);
+                return Ok(()); // Continue with existing devices
+            }
+        } else {
+            log::info!("Mounted hardened tmpfs at {}", dev_path.display());
+        }
+
+        // Create minimal essential device nodes on the new tmpfs
+        self.create_minimal_devices(dev_path)?;
+
+        Ok(())
+    }
+
+    /// Mount procfs with hardened security flags
+    #[cfg(unix)]
+    fn mount_hardened_procfs(&self, proc_path: &Path) -> Result<()> {
+        let mount_flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
+        
+        let source_cstr = std::ffi::CString::new("proc")
+            .map_err(|e| IsolateError::Config(format!("Invalid source string: {}", e)))?;
+        let target_cstr = std::ffi::CString::new(proc_path.to_string_lossy().as_bytes())
+            .map_err(|e| IsolateError::Config(format!("Invalid proc path: {}", e)))?;
+        let fstype_cstr = std::ffi::CString::new("proc")
+            .map_err(|e| IsolateError::Config(format!("Invalid fstype string: {}", e)))?;
+        
+        let result = unsafe {
+            libc::mount(
+                source_cstr.as_ptr(),
+                target_cstr.as_ptr(),
+                fstype_cstr.as_ptr(),
+                mount_flags,
+                std::ptr::null(),
+            )
+        };
+
+        if result != 0 {
+            let errno = unsafe { *libc::__errno_location() };
+            if self.strict_mode {
+                return Err(IsolateError::Config(format!(
+                    "Failed to mount hardened procfs: errno {}",
+                    errno
+                )));
+            } else {
+                log::warn!("Failed to mount hardened procfs: errno {}", errno);
+            }
+        } else {
+            log::info!("Mounted hardened procfs at {}", proc_path.display());
+        }
+
+        Ok(())
+    }
+
+    /// Create minimal essential device nodes
+    #[cfg(unix)]
+    fn create_minimal_devices(&self, dev_path: &Path) -> Result<()> {
+        let devices = [
+            ("null", libc::S_IFCHR, 1, 3),      // /dev/null
+            ("zero", libc::S_IFCHR, 1, 5),      // /dev/zero
+            ("random", libc::S_IFCHR, 1, 8),    // /dev/random
+            ("urandom", libc::S_IFCHR, 1, 9),   // /dev/urandom
+        ];
+
+        for (name, mode, major, minor) in &devices {
+            let device_path = dev_path.join(name);
+            let path_cstr = std::ffi::CString::new(device_path.to_string_lossy().as_bytes())
+                .map_err(|e| IsolateError::Config(format!("Invalid device path: {}", e)))?;
+            
+            let result = unsafe {
+                libc::mknod(
+                    path_cstr.as_ptr(),
+                    mode | 0o666,
+                    libc::makedev(*major, *minor),
+                )
+            };
+
+            if result != 0 {
+                let errno = unsafe { *libc::__errno_location() };
+                log::warn!("Failed to create device {}: errno {}", name, errno);
+                // Continue creating other devices even if one fails
+            } else {
+                log::debug!("Created device node: {}", device_path.display());
+            }
         }
 
         Ok(())

@@ -6,8 +6,6 @@ use std::io::{BufWriter, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 
 /// I/O handler for managing stdin, stdout, stderr with advanced security features
 ///
@@ -64,11 +62,19 @@ impl IoHandler {
         // Configure stdout redirection with security
         if let Some(ref stdout_file) = self.config.stdout_file {
             self.validate_file_path(stdout_file)?;
-            let file = OpenOptions::new()
+            let mut open_options = OpenOptions::new();
+            open_options
                 .create(true)
                 .write(true)
-                .truncate(true)
-                .mode(0o600) // Restrictive permissions for security
+                .truncate(true);
+            
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                open_options.mode(0o600); // Restrictive permissions for security
+            }
+            
+            let file = open_options
                 .open(stdout_file)
                 .map_err(|e| IsolateError::Io(e))?;
             cmd.stdout(Stdio::from(file));
@@ -81,11 +87,19 @@ impl IoHandler {
         // Configure stderr redirection with security
         if let Some(ref stderr_file) = self.config.stderr_file {
             self.validate_file_path(stderr_file)?;
-            let file = OpenOptions::new()
+            let mut open_options = OpenOptions::new();
+            open_options
                 .create(true)
                 .write(true)
-                .truncate(true)
-                .mode(0o600) // Restrictive permissions for security
+                .truncate(true);
+            
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                open_options.mode(0o600); // Restrictive permissions for security
+            }
+            
+            let file = open_options
                 .open(stderr_file)
                 .map_err(|e| IsolateError::Io(e))?;
             cmd.stderr(Stdio::from(file));

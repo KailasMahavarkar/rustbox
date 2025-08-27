@@ -1,12 +1,78 @@
-use std::os::unix::process::ExitStatusExt;/// Core types and structures for the rustbox system
+/// Core types and structures for the rustbox system
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 use thiserror::Error;
 
-/// Helper function for serde default value
-fn default_true() -> bool {
-    true
+
+/// Directory binding configuration for filesystem access
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DirectoryBinding {
+    /// Source directory on host system
+    pub source: PathBuf,
+    /// Target directory within sandbox
+    pub target: PathBuf,
+    /// Access permissions
+    pub permissions: DirectoryPermissions,
+    /// Ignore if source doesn't exist
+    pub maybe: bool,
+    /// Create as temporary directory
+    pub is_tmp: bool,
+}
+
+/// Directory access permissions
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum DirectoryPermissions {
+    /// Read-only access
+    ReadOnly,
+    /// Read-write access
+    ReadWrite,
+    /// No execution allowed
+    NoExec,
+}
+
+impl DirectoryBinding {
+    /// Parse directory binding from string format like "source=target:options"
+    pub fn parse(binding_str: &str) -> std::result::Result<Self, String> {
+        let parts: Vec<&str> = binding_str.split(':').collect();
+        let path_part = parts[0];
+        let options = if parts.len() > 1 { parts[1] } else { "" };
+
+        let (source, target) = if path_part.contains('=') {
+            let path_parts: Vec<&str> = path_part.split('=').collect();
+            if path_parts.len() != 2 {
+                return Err("Invalid directory binding format. Use: source=target or source=target:options".to_string());
+            }
+            (PathBuf::from(path_parts[0]), PathBuf::from(path_parts[1]))
+        } else {
+            // If no target specified, use same path in sandbox
+            (PathBuf::from(path_part), PathBuf::from(path_part))
+        };
+
+        let mut permissions = DirectoryPermissions::ReadOnly;
+        let mut maybe = false;
+        let mut is_tmp = false;
+
+        for option in options.split(',') {
+            match option.trim() {
+                "rw" => permissions = DirectoryPermissions::ReadWrite,
+                "ro" => permissions = DirectoryPermissions::ReadOnly,
+                "noexec" => permissions = DirectoryPermissions::NoExec,
+                "maybe" => maybe = true,
+                "tmp" => is_tmp = true,
+                "" => {}, // Empty option
+                _ => return Err(format!("Unknown directory binding option: {}", option)),
+            }
+        }
+
+        Ok(DirectoryBinding {
+            source,
+            target,
+            permissions,
+            maybe,
+            is_tmp,
+        })
+    }
 }
 
 /// Process isolation configuration
@@ -46,18 +112,11 @@ pub struct IsolateConfig {
     pub enable_network: bool,
     /// Custom environment variables
     pub environment: Vec<(String, String)>,
-    /// Allowed syscalls (seccomp filter)
-    pub allowed_syscalls: Option<Vec<String>>,
     /// Strict mode: fail hard if cgroups unavailable or permission denied
     pub strict_mode: bool,
     /// Inherit file descriptors from parent process
     #[serde(default)]
     pub inherit_fds: bool,
-    /// Enable seccomp syscall filtering
-    #[serde(default = "default_true")]
-    pub enable_seccomp: bool,
-    /// Language-specific seccomp profile
-    pub seccomp_profile: Option<String>,
     /// Redirect stdout to file (optional)
     pub stdout_file: Option<PathBuf>,
     /// Redirect stderr to file (optional)
@@ -77,8 +136,8 @@ pub struct IsolateConfig {
     pub enable_mount_namespace: bool,
     pub enable_network_namespace: bool,
     pub enable_user_namespace: bool,
-    /// Use multi-process architecture for production reliability
-    pub use_multiprocess: bool,
+    /// Directory bindings for filesystem access
+    pub directory_bindings: Vec<DirectoryBinding>,
 }
 
 impl Default for IsolateConfig {
@@ -89,7 +148,7 @@ impl Default for IsolateConfig {
             chroot_dir: None,
             uid: None,
             gid: None,
-            memory_limit: Some(128 * 1024 * 1024), // 128MB default
+            memory_limit: Some(256 * 1024 * 1024), // 128MB default
             time_limit: Some(Duration::from_secs(10)),
             cpu_time_limit: Some(Duration::from_secs(10)),
             wall_time_limit: Some(Duration::from_secs(20)),
@@ -101,11 +160,8 @@ impl Default for IsolateConfig {
             disk_quota: None, // No disk quota by default
             enable_network: false,
             environment: Vec::new(),
-            allowed_syscalls: None,
             strict_mode: false,
             inherit_fds: false,
-            enable_seccomp: true,
-            seccomp_profile: None,
             stdout_file: None,
             stderr_file: None,
             enable_tty: false,
@@ -118,7 +174,7 @@ impl Default for IsolateConfig {
             enable_mount_namespace: true,
             enable_network_namespace: true,
             enable_user_namespace: false, // User namespace can be complex, disabled by default
-            use_multiprocess: false, // Single-process by default for compatibility
+            directory_bindings: Vec::new(),
         }
     }
 }
@@ -241,7 +297,17 @@ impl From<std::process::Output> for ExecutionResult {
             cpu_time: 0.0, // Not available from std::process::Output
             wall_time: 0.0, // Not available from std::process::Output
             memory_peak: 0, // Not available from std::process::Output
-            signal: output.status.signal(),
+            signal: {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    output.status.signal()
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            },
             success: output.status.success(),
             error_message: None,
         }
@@ -254,9 +320,5 @@ impl From<nix::errno::Errno> for IsolateError {
 }impl Default for ExecutionStatus {
     fn default() -> Self {
         ExecutionStatus::Success
-    }
-}impl From<caps::errors::CapsError> for IsolateError {
-    fn from(err: caps::errors::CapsError) -> Self {
-        IsolateError::Process(err.to_string())
     }
 }

@@ -1,4 +1,0 @@
-#!/bin/bash
-set -e
-cd isolate
-dpkg-buildpackage -b -uc -tc

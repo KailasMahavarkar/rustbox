@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo:*)",
+      "Bash(./target/debug/rustbox:*)",
+      "Bash(RUST_LOG=debug ./target/debug/rustbox init --box-id 1)",
+      "Bash(RUST_LOG=debug ./target/debug/rustbox run --box-id 5 /usr/bin/python3 simple.py)"
+    ],
+    "additionalDirectories": [
+      "/mnt/c/Users/Admin/Desktop/rustbox",
+      "/tmp/rustbox",
+      "/tmp/rustbox",
+      "/home/rook",
+      "/mnt/c/Users/Admin/Desktop"
+    ]
+  }
+}
