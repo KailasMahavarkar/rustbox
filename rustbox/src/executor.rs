@@ -1,8 +1,11 @@
 /// Process execution and monitoring with reliable resource limits
 use crate::cgroup::Cgroup;
 use crate::filesystem::FilesystemSecurity;
+use crate::security::command_validation;
+use crate::security_logging::events;
 use crate::types::{ExecutionResult, ExecutionStatus, IsolateConfig, IsolateError, Result};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -95,6 +98,24 @@ impl ProcessExecutor {
         Ok(())
     }
 
+    /// Validate command for security before execution
+    fn validate_command(&self, command: &[String]) -> Result<PathBuf> {
+        if command.is_empty() {
+            return Err(IsolateError::Config("Empty command provided".to_string()));
+        }
+        
+        // Use security module to validate and resolve command
+        match command_validation::validate_and_resolve_command(&command[0]) {
+            Ok(path) => Ok(path),
+            Err(e) => {
+                // Log security event for command injection attempt
+                let box_id = self.config.instance_id.parse::<u32>().ok();
+                events::command_injection_attempt(command[0].clone(), box_id);
+                Err(e)
+            }
+        }
+    }
+
     /// Validate that resource monitoring is working properly
     fn validate_resource_monitoring(&self) -> Result<()> {
         if let Some(ref cgroup) = self.cgroup {
@@ -143,11 +164,14 @@ impl ProcessExecutor {
 
         let start_time = Instant::now();
 
+        // Validate command for security BEFORE any execution
+        let validated_command = self.validate_command(command)?;
+
         // Setup resource limits
         self.setup_resource_limits()?;
 
-        // Create the command with minimal configuration
-        let mut cmd = Command::new(&command[0]);
+        // Create the command with validated executable path
+        let mut cmd = Command::new(validated_command);
         if command.len() > 1 {
             cmd.args(&command[1..]);
         }
@@ -347,7 +371,15 @@ impl ProcessExecutor {
                         let (memory_limited, _cpu_limited) = cgroup.is_resource_limited();
 
                         if memory_limited {
-                            // Memory limit exceeded
+                            // Memory limit exceeded - log security event
+                            let box_id = self.config.instance_id.parse::<u32>().ok();
+                            events::resource_limit_exceeded(
+                                "memory".to_string(),
+                                self.config.memory_limit.map(|m| format!("{} bytes", m))
+                                    .unwrap_or_else(|| "unknown".to_string()),
+                                box_id
+                            );
+                            
                             self.terminate_process(child_id);
                             let _ = child.wait();
 

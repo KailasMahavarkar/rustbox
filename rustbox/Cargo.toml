@@ -22,3 +22,4 @@ crossbeam-channel = "0.5"
 [[bin]]
 name = "rustbox"
 path = "src/main.rs"
+

@@ -138,6 +138,12 @@ fn main() -> Result<()> {
     // Initialize structured logging for security monitoring
     env_logger::init();
 
+    // Initialize security logger for audit trail
+    if let Err(e) = rustbox::security_logging::init_security_logger(None) {
+        eprintln!("Failed to initialize security logger: {}", e);
+        std::process::exit(1);
+    }
+
     // Initialize the enhanced lock manager
     if let Err(e) = rustbox::lock_manager::init_lock_manager() {
         eprintln!("Failed to initialize lock manager: {}", e);
@@ -230,7 +236,7 @@ fn main() -> Result<()> {
             if !directory_bindings.is_empty() {
                 let mut bindings = Vec::new();
                 for binding_str in &directory_bindings {
-                    match rustbox::types::DirectoryBinding::parse(binding_str) {
+                    match rustbox::types::DirectoryBinding::parse_secure(binding_str) {
                         Ok(binding) => {
                             eprintln!(
                                 "Directory binding: {} -> {} ({:?})",

@@ -7,4 +7,7 @@ pub mod filesystem;
 pub mod isolate;
 pub mod lock_manager;
 pub mod namespace;
+pub mod security;
+pub mod security_logging;
+pub mod tests;
 pub mod types;

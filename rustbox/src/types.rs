@@ -76,6 +76,65 @@ impl DirectoryBinding {
             is_tmp,
         })
     }
+
+    /// Parse directory binding with enhanced security validation
+    pub fn parse_secure(binding_str: &str) -> crate::types::Result<Self> {
+        use crate::security::path_validation;
+        use crate::security_logging::events;
+        
+        let parts: Vec<&str> = binding_str.split(':').collect();
+        let path_part = parts[0];
+        let options = if parts.len() > 1 { parts[1] } else { "" };
+
+        let (source, target) = if path_part.contains('=') {
+            let path_parts: Vec<&str> = path_part.split('=').collect();
+            if path_parts.len() != 2 {
+                return Err(crate::types::IsolateError::Config(
+                    "Invalid directory binding format. Use: source=target or source=target:options"
+                        .to_string(),
+                ));
+            }
+            (std::path::Path::new(path_parts[0]), std::path::Path::new(path_parts[1]))
+        } else {
+            // If no target specified, use same path in sandbox
+            let path = std::path::Path::new(path_part);
+            (path, path)
+        };
+
+        // Use security validation for paths
+        let (validated_source, validated_target) = match path_validation::validate_directory_binding(source, target) {
+            Ok(paths) => paths,
+            Err(e) => {
+                // Log security event for path traversal attempt
+                events::path_traversal_attempt(binding_str.to_string(), None);
+                return Err(e);
+            }
+        };
+
+        let mut permissions = DirectoryPermissions::ReadOnly;
+        let mut maybe = false;
+        let mut is_tmp = false;
+
+        for option in options.split(',') {
+            match option.trim() {
+                "rw" => permissions = DirectoryPermissions::ReadWrite,
+                "ro" => permissions = DirectoryPermissions::ReadOnly,
+                "noexec" => permissions = DirectoryPermissions::NoExec,
+                "maybe" => maybe = true,
+                "tmp" => is_tmp = true,
+                "" => {} // Empty option
+                _ => return Err(crate::types::IsolateError::Config(format!("Unknown directory binding option: {}", option))),
+            }
+        }
+
+        Ok(DirectoryBinding {
+            source: validated_source,
+            target: validated_target,
+            permissions,
+            maybe,
+            is_tmp,
+        })
+    }
 }
 
 /// Process isolation configuration

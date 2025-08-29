@@ -29,7 +29,19 @@
       "Bash(*)",
       "Bash(chmod:*)",
       "Bash(cargo test:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Read(/run/rustbox/locks/**)",
+      "Bash(ulimit:*)",
+      "Read(/proc/sys/kernel/**)",
+      "Bash(for:*)",
+      "Bash(do)",
+      "Bash(done)",
+      "Bash(RUST_LOG=debug cargo test test_language_support -- --nocapture)",
+      "Bash(target/release/rustbox:*)",
+      "Bash(RUST_BACKTRACE=1 cargo test security::tests::test_command_validation_allowed)",
+      "Read(/usr/bin/**)",
+      "Read(/usr/bin/**)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

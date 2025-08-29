@@ -27,6 +27,10 @@ extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
 }
 
+/// Resource limits for lock manager
+const MAX_CONCURRENT_LOCKS: u64 = 1000;
+const MAX_MEMORY_USAGE_MB: u64 = 100;
+
 /// The main lock manager implementing "Living Locks" with heartbeat
 pub struct RustboxLockManager {
     lock_dir: PathBuf,
@@ -35,6 +39,7 @@ pub struct RustboxLockManager {
     cleanup_thread: Option<JoinHandle<()>>,
     cleanup_shutdown: Option<Sender<()>>,
     metrics: Arc<Mutex<LockManagerMetrics>>,
+    active_locks: Arc<AtomicU64>,
 }
 
 /// Internal metrics tracking
@@ -58,7 +63,7 @@ pub struct BoxLock {
     owner_pid: u32,
     created_at: SystemTime,
     heartbeat_file: File,
-    heartbeat_handle: JoinHandle<()>,
+    heartbeat_handle: Option<JoinHandle<()>>,
     heartbeat_shutdown: Sender<()>,
 }
 
@@ -74,24 +79,114 @@ pub struct BoxLockGuard {
 struct DropGuard {
     box_id: u32,
     lock_dir: PathBuf,
+    active_locks_counter: Arc<AtomicU64>,
 }
 
 impl RustboxLockManager {
+    /// Determine the best lock directory to use with fallback options
+    fn get_lock_directory() -> LockResult<PathBuf> {
+        // Preferred directories in order of preference
+        let preferred_dirs = [
+            "/var/run/rustbox/locks",
+            "/tmp/rustbox/locks",
+            "/tmp/.rustbox-locks",
+        ];
+
+        for dir_path in &preferred_dirs {
+            let path = PathBuf::from(dir_path);
+
+            // Try to create the parent directory first
+            if let Some(parent) = path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    if e.kind() != std::io::ErrorKind::AlreadyExists {
+                        continue; // Try next directory
+                    }
+                }
+            }
+
+            // Test if we can create the directory and write to it
+            match std::fs::create_dir_all(&path) {
+                Ok(()) => {
+                    // Test write access
+                    let test_file = path.join(format!(".access_test_{}", std::process::id()));
+                    if std::fs::write(&test_file, b"test").is_ok() {
+                        let _ = std::fs::remove_file(&test_file);
+                        return Ok(path);
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Directory exists, test write access
+                    let test_file = path.join(format!(".access_test_{}", std::process::id()));
+                    if std::fs::write(&test_file, b"test").is_ok() {
+                        let _ = std::fs::remove_file(&test_file);
+                        return Ok(path);
+                    }
+                }
+                _ => continue, // Try next directory
+            }
+        }
+
+        Err(LockError::PermissionDenied {
+            details: "Cannot find or create a writable lock directory".to_string(),
+        })
+    }
+
+    /// Create lock directory with robust concurrent handling
+    fn create_lock_directory_with_retry(lock_dir: &Path) -> LockResult<()> {
+        for attempt in 0..3 {
+            match std::fs::create_dir_all(lock_dir) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Directory already exists, verify it's actually a directory
+                    if lock_dir.is_dir() {
+                        return Ok(());
+                    } else {
+                        return Err(LockError::PermissionDenied {
+                            details: format!(
+                                "Lock path {} exists but is not a directory",
+                                lock_dir.display()
+                            ),
+                        });
+                    }
+                }
+                Err(e) if attempt < 2 => {
+                    // Retry after a short delay for transient errors
+                    warn!(
+                        "Failed to create lock directory on attempt {}: {}. Retrying...",
+                        attempt + 1,
+                        e
+                    );
+                    thread::sleep(Duration::from_millis(10 + attempt as u64 * 10));
+                    continue;
+                }
+                Err(e) => {
+                    return Err(LockError::PermissionDenied {
+                        details: format!(
+                            "Cannot create lock directory {} after {} attempts: {}",
+                            lock_dir.display(),
+                            attempt + 1,
+                            e
+                        ),
+                    });
+                }
+            }
+        }
+        unreachable!()
+    }
+
     /// Create new lock manager with enhanced safety
     pub fn new() -> LockResult<Self> {
-        let lock_dir = PathBuf::from("/var/run/rustbox/locks");
+        let lock_dir = Self::get_lock_directory()?;
 
-        // Fail fast if we can't create lock directory
-        std::fs::create_dir_all(&lock_dir).map_err(|e| LockError::PermissionDenied {
-            details: format!("Cannot create lock directory {}: {}", lock_dir.display(), e),
-        })?;
+        // Create lock directory with retry logic to handle concurrent creation
+        Self::create_lock_directory_with_retry(&lock_dir)?;
 
-        // Test write permissions immediately
-        let test_file = lock_dir.join(".write_test");
+        // Test write permissions with unique filename to avoid conflicts
+        let test_file = lock_dir.join(format!(".write_test_{}", std::process::id()));
         std::fs::write(&test_file, b"test").map_err(|e| LockError::PermissionDenied {
             details: format!("Lock directory not writable: {}", e),
         })?;
-        std::fs::remove_file(&test_file)?;
+        let _ = std::fs::remove_file(&test_file); // Don't fail if cleanup fails
 
         let manager = Self {
             lock_dir,
@@ -100,6 +195,7 @@ impl RustboxLockManager {
             cleanup_thread: None,
             cleanup_shutdown: None,
             metrics: Arc::new(Mutex::new(LockManagerMetrics::default())),
+            active_locks: Arc::new(AtomicU64::new(0)),
         };
 
         info!(
@@ -153,11 +249,19 @@ impl RustboxLockManager {
 
     /// Core lock acquisition with retry logic and exponential backoff
     pub fn acquire_lock(&self, box_id: u32, timeout: Duration) -> LockResult<BoxLockGuard> {
+        // Check resource limits before acquiring lock
+        let current_locks = self.active_locks.load(Ordering::Acquire);
+        if current_locks >= MAX_CONCURRENT_LOCKS {
+            return Err(LockError::SystemError {
+                message: format!("Too many concurrent locks: {}/{}", current_locks, MAX_CONCURRENT_LOCKS),
+            });
+        }
+
         let start_time = Instant::now();
         let lock_path = self.lock_dir.join(format!("box-{}.lock", box_id));
         let heartbeat_path = self.lock_dir.join(format!("box-{}.heartbeat", box_id));
 
-        info!("Attempting to acquire lock for box {}", box_id);
+        info!("Attempting to acquire lock for box {} (active locks: {})", box_id, current_locks);
 
         // Step 1: Clean any stale lock first
         if let Err(e) = self.cleanup_stale_lock_if_needed(box_id) {
@@ -266,16 +370,20 @@ impl RustboxLockManager {
             owner_pid: std::process::id(),
             created_at: SystemTime::now(),
             heartbeat_file,
-            heartbeat_handle,
+            heartbeat_handle: Some(heartbeat_handle),
             heartbeat_shutdown,
         };
 
-        // Step 7: Return RAII guard
+        // Step 7: Increment active lock counter
+        self.active_locks.fetch_add(1, Ordering::Release);
+        
+        // Step 8: Return RAII guard
         Ok(BoxLockGuard {
             lock: Some(Arc::new(Mutex::new(lock))),
             _cleanup: DropGuard {
                 box_id,
                 lock_dir: self.lock_dir.clone(),
+                active_locks_counter: self.active_locks.clone(),
             },
         })
     }
@@ -661,8 +769,15 @@ impl RustboxLockManager {
     }
 
     fn test_directory_writable(&self) -> bool {
-        let test_file = self.lock_dir.join(".health_check");
-        std::fs::write(&test_file, b"test").is_ok() && std::fs::remove_file(test_file).is_ok()
+        let test_file = self
+            .lock_dir
+            .join(format!(".health_check_{}", std::process::id()));
+        if std::fs::write(&test_file, b"test").is_ok() {
+            let _ = std::fs::remove_file(&test_file); // Don't fail if cleanup fails
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -696,12 +811,57 @@ impl BoxLockGuard {
 
 impl Drop for BoxLockGuard {
     fn drop(&mut self) {
-        if let Some(lock) = self.lock.take() {
-            if let Ok(lock) = lock.lock() {
-                // Signal heartbeat thread to stop
-                let _ = lock.heartbeat_shutdown.send(());
-                // Wait for heartbeat thread (with timeout to avoid hanging)
-                // Note: In production, we might want a more sophisticated shutdown mechanism
+        if let Some(lock_arc) = self.lock.take() {
+            // First, signal shutdown and extract the thread handle
+            let handle_option = {
+                if let Ok(mut lock) = lock_arc.lock() {
+                    // Signal heartbeat thread to stop
+                    if let Err(e) = lock.heartbeat_shutdown.send(()) {
+                        warn!("Failed to send shutdown signal to heartbeat thread: {}", e);
+                    }
+                    
+                    // Extract the thread handle so we can join it outside the lock
+                    lock.heartbeat_handle.take()
+                } else {
+                    warn!("Failed to acquire lock for cleanup - proceeding without thread join");
+                    None
+                }
+            };
+            
+            // Wait for thread completion with timeout outside the lock
+            if let Some(handle) = handle_option {
+                // Use a simple timeout approach
+                // Since we can't easily timeout join(), we'll give it a short grace period
+                // and then let the thread cleanup naturally when the process exits
+                
+                // Give the shutdown signal time to reach the thread
+                thread::sleep(Duration::from_millis(100));
+                
+                // Try to join with a very short timeout by using a separate thread
+                let (tx, rx) = crossbeam_channel::bounded(1);
+                std::thread::spawn(move || {
+                    match handle.join() {
+                        Ok(()) => {
+                            let _ = tx.send(Ok(()));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(format!("{:?}", e)));
+                        }
+                    }
+                });
+                
+                // Wait up to 2 seconds for thread to finish
+                match rx.recv_timeout(Duration::from_secs(2)) {
+                    Ok(Ok(())) => {
+                        info!("Heartbeat thread shutdown gracefully");
+                    }
+                    Ok(Err(e)) => {
+                        warn!("Heartbeat thread panicked during shutdown: {}", e);
+                    }
+                    Err(_) => {
+                        warn!("Heartbeat thread shutdown timeout - thread may be orphaned but will be cleaned up on process exit");
+                    }
+                }
             }
         }
     }
@@ -715,6 +875,10 @@ impl Drop for DropGuard {
 
         let _ = std::fs::remove_file(lock_path);
         let _ = std::fs::remove_file(heartbeat_path);
+        
+        // Decrement the active lock counter
+        let prev_count = self.active_locks_counter.fetch_sub(1, Ordering::Release);
+        info!("Lock released for box {} (active locks: {} -> {})", self.box_id, prev_count, prev_count - 1);
     }
 }
 
@@ -802,5 +966,3 @@ where
     // Lock is automatically released when file goes out of scope
     operation()
 }
-
-include!("lock_manager_tests.rs");
