@@ -26,6 +26,8 @@ Session.vim
 .settings/
 .vs/
 .dir-locals.el
+venv/
+__pycache__/
 
 ## Tool
 .valgrindrc

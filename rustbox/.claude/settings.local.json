@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(/mnt/c/Users/Admin/Desktop/rustbox/**)",
+      "Read(/home/**)",
+      "Bash(sudo:*)",
+      "Read(/tmp/**)",
+      "Read(/tmp/**)",
+      "Read(/tmp/**)",
+      "Read(/tmp/**)",
+      "Read(/tmp/**)",
+      "Read(/tmp/**)",
+      "Read(/tmp/**)",
+      "Read(/tmp/rustbox/locks/**)",
+      "Read(/tmp/rustbox/locks/**)",
+      "Read(/tmp/**)",
+      "Read(/tmp/rustbox/locks/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

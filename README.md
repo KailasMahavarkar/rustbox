@@ -1,226 +1,312 @@
-# rustbox
+# codejudge-like System with Rustbox
 
-A secure process isolation and resource control system inspired by IOI Isolate, designed for safe execution of untrusted code with comprehensive sandbox capabilities.
+A secure, scalable code execution system built with FastAPI, PostgreSQL, Redis, and powered by the rustbox sandboxing engine. This system provides a codejudge-compatible API for safe execution of untrusted code with comprehensive resource limits and isolation.
 
-## 🔒 Security Features
+## 🚀 Features
 
-- **Namespace Isolation**: PID, mount, network, and user namespace separation
-- **Resource Limits**: Memory, CPU, file size, and execution time enforcement  
-- **Filesystem Isolation**: Chroot-based filesystem containment
-- **Cgroups Support**: Resource enforcement using cgroups v1 for maximum compatibility
-- **Path Validation**: Directory traversal attack prevention
-- **Memory Safety**: Rust implementation eliminates entire classes of security vulnerabilities
+-   **Secure Code Execution**: Uses rustbox for process isolation and resource control
+-   **codejudge-Compatible API**: Drop-in replacement for codejudge with similar endpoints
+-   **Multiple Languages**: Support for Python, C++, C, Java, JavaScript, Rust, Go
+-   **Scalable Architecture**: Horizontal scaling with multiple worker processes
+-   **Queue Management**: Priority-based job queuing with Redis
+-   **Resource Limits**: Configurable memory, CPU, and time limits
+-   **Real-time Monitoring**: Health checks and system statistics
+-   **Docker Deployment**: Complete containerized deployment with Docker Compose
 
-## 🚀 Quick Start
+## 📋 Prerequisites
 
-```bash
-# Initialize a sandbox
-rustbox init --box-id 0
+-   Docker and Docker Compose
+-   Rust (for building rustbox)
+-   Linux system with cgroups support (for rustbox)
 
-# Run code with resource limits
-rustbox run --box-id 0 --mem 128 --time 10 /usr/bin/python3 solution.py
+## 🛠️ Quick Start
 
-# Cleanup sandbox
-rustbox cleanup --box-id 0
-```
+### 1. Build Rustbox
 
-## 📋 Requirements
-
-- **Operating System**: Linux with cgroups v1 support (primary), Unix-like systems (limited functionality)
-- **Privileges**: Root access required for namespace and resource management
-- **Dependencies**: 
-  - Rust 1.70+ (for building)
-  - systemd (for service management)
-  - Python 3 (for test programs)
-
-## 🛠️ Installation
-
-### From Source
+First, build the rustbox binary from the rustbox-core project:
 
 ```bash
-git clone <repository-url>
-cd rustbox
+cd ../rustbox-core
 cargo build --release
-sudo cp target/release/rustbox /usr/bin/
+cd ../rustbox-api
 ```
 
-### Using Debian Package
+### 2. Deploy the System
+
+Use the deployment script to build and deploy the complete system:
 
 ```bash
-cargo install cargo-deb
-cargo deb
-sudo dpkg -i target/debian/rustbox_*.deb
+chmod +x deploy.sh
+./deploy.sh build
 ```
 
-## 📖 Usage
+This will:
 
-### Basic Commands
+-   Build the rustbox binary
+-   Copy it to the API directory
+-   Start all services with Docker Compose
+-   Run health checks
+
+### 3. Test the API
+
+Test the system with a simple Python program:
 
 ```bash
-# Initialize sandbox environment
-rustbox init --box-id <ID>
-
-# Execute program with limits
-rustbox run --box-id <ID> [OPTIONS] <COMMAND> [ARGS...]
-
-# Clean up sandbox
-rustbox cleanup --box-id <ID>
-
-# Get system status
-rustbox status
+curl -X POST http://localhost:8000/submissions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_code": "print(\"Hello, World!\")",
+    "language_id": 1,
+    "stdin": ""
+  }'
 ```
 
-### Resource Limit Options
+## 📁 Project Structure
+
+```
+rustbox-api/
+├── app/
+│   ├── __init__.py
+│   ├── main.py              # FastAPI application
+│   ├── worker.py            # Worker process
+│   ├── config.py            # Configuration settings
+│   ├── models/              # Database models
+│   │   ├── __init__.py
+│   │   ├── database.py      # SQLAlchemy models
+│   │   └── schemas.py       # Pydantic schemas
+│   ├── routes/              # API routes
+│   │   ├── __init__.py
+│   │   ├── submissions.py   # Submission endpoints
+│   │   ├── languages.py     # Language endpoints
+│   │   └── system.py        # System endpoints
+│   └── services/            # Business logic
+│       ├── __init__.py
+│       ├── database.py      # Database service
+│       ├── rustbox_service.py # Rustbox integration
+│       └── queue_service.py # Redis queue service
+├── docker-compose.yml       # Service orchestration
+├── Dockerfile              # Application container
+├── deploy.sh               # Deployment script
+├── init_db.py              # Database initialization
+├── requirements.txt        # Python dependencies
+├── env.example             # Environment variables example
+└── README.md              # This file
+```
+
+## 🔧 Configuration
+
+The system is configured through environment variables. Key settings include:
+
+### Database
+
+-   `DATABASE_URL`: PostgreSQL connection string
+-   `REDIS_URL`: Redis connection string
+
+### Rustbox
+
+-   `RUSTBOX_BINARY_PATH`: Path to rustbox binary
+-   `RUSTBOX_WORK_DIR`: Working directory for rustbox
+
+### Resource Limits
+
+-   `DEFAULT_MEMORY_LIMIT_MB`: Default memory limit (512 MB)
+-   `DEFAULT_TIME_LIMIT_SECONDS`: Default time limit (10 seconds)
+-   `MAX_MEMORY_LIMIT_MB`: Maximum allowed memory (2048 MB)
+-   `MAX_TIME_LIMIT_SECONDS`: Maximum allowed time (60 seconds)
+
+### Worker Settings
+
+-   `WORKER_CONCURRENCY`: Number of concurrent workers (4)
+-   `WORKER_PREFETCH_MULTIPLIER`: Queue prefetch multiplier (1)
+
+## 📚 API Endpoints
+
+### Submissions
+
+-   `POST /submissions` - Create a new submission
+-   `POST /submissions/batch` - Create multiple submissions
+-   `GET /submissions` - List submissions with filtering
+-   `GET /submissions/{id}` - Get specific submission
+-   `PUT /submissions/{id}` - Update submission
+-   `DELETE /submissions/{id}` - Delete submission
+
+### Languages
+
+-   `GET /languages` - List supported languages
+-   `GET /languages/{id}` - Get specific language
+
+### System
+
+-   `GET /system/health` - Health check
+-   `GET /system/info` - System information
+-   `GET /system/stats` - Detailed statistics
+
+## 🔒 Supported Languages
+
+| ID  | Language | Version | Extension |
+| --- | -------- | ------- | --------- |
+| 1   | Python   | 3.8.1   | .py       |
+| 2   | C++      | 9.2.0   | .cpp      |
+| 3   | Java     | 13.0.1  | .java     |
+
+## 🚀 Deployment Options
+
+### Development
+
+For development, you can run the system without Docker:
 
 ```bash
-rustbox run --box-id 0 \
-  --mem 256          # Memory limit in MB
-  --time 30          # CPU time limit in seconds  
-  --wall-time 60     # Wall clock time limit in seconds
-  --fsize 10         # File size limit in MB
-  --processes 10     # Process count limit
-  /usr/bin/python3 script.py
+# Install dependencies
+pip install -r requirements.txt
+
+# Set up database
+python init_db.py
+
+# Start the API server
+python -m app.main
+
+# Start worker in another terminal
+python -m app.worker
 ```
 
-### Advanced Isolation
+### Production
+
+For production deployment:
 
 ```bash
-rustbox run --box-id 0 \
-  --isolate-pids     # PID namespace isolation
-  --isolate-net      # Network isolation  
-  --isolate-fs       # Filesystem isolation
-  --chroot /path     # Custom chroot directory
-  /usr/bin/gcc program.c
+# Deploy with Docker Compose
+./deploy.sh deploy
+
+# Or build and deploy
+./deploy.sh build
 ```
 
-## 🏗️ Project Structure
+### Scaling
 
-```
-rustbox/
-├── src/                    # Core implementation
-│   ├── main.rs            # CLI interface and command handling
-│   ├── isolate.rs         # Core sandbox logic
-│   ├── executor.rs        # Process execution management
-│   ├── filesystem.rs      # Filesystem isolation
-│   ├── namespace.rs       # Linux namespace management
-│   ├── cgroup.rs          # Cgroups resource control
-│   ├── io_handler.rs      # Input/output redirection
-│   └── types.rs           # Shared type definitions
-├── tests/                 # Comprehensive test suite
-│   ├── core/              # Basic functionality tests
-│   ├── security/          # Security and isolation tests
-│   ├── resource/          # Resource limit validation
-│   ├── stress/            # Load and scalability tests
-│   ├── performance/       # Performance benchmarks
-│   └── integration/       # End-to-end workflow tests
-├── test_programs/         # Sample programs for testing
-├── systemd/               # Service configuration files
-└── debian/                # Debian packaging scripts
-```
-
-## 🧪 Testing
-
-### Run Test Suites
+To scale the system horizontally:
 
 ```bash
-# All tests (requires sudo)
-sudo ./run_tests.sh
+# Scale workers
+docker-compose up -d --scale worker=4
 
-# Specific test categories
-sudo ./tests/run_category.sh core
-sudo ./tests/run_category.sh security  
-sudo ./tests/run_category.sh stress
-
-# Individual tests
-sudo ./tests/core/quick_core_test.sh
-sudo ./tests/security/isolation_test.sh
+# Or modify docker-compose.yml
+# deploy:
+#   replicas: 4
 ```
 
-### Test Categories
+## 📊 Monitoring
 
-- **Core Tests**: Essential functionality validation
-- **Security Tests**: Isolation and containment verification
-- **Resource Tests**: Resource limit enforcement
-- **Stress Tests**: Load testing and scalability
-- **Performance Tests**: Benchmark measurements
-- **Integration Tests**: End-to-end workflows
-
-## ⚙️ Configuration
-
-### System Service
-
-Enable as systemd service:
+### Health Checks
 
 ```bash
-sudo systemctl enable rustbox
-sudo systemctl start rustbox
+# Check system health
+curl http://localhost:8000/system/health
+
+# Get system information
+curl http://localhost:8000/system/info
+
+# Get detailed statistics
+curl http://localhost:8000/system/stats
 ```
 
-### Language Support
-
-Setup common programming language environments:
+### Logs
 
 ```bash
-sudo ./setup_languages.sh
+# View all logs
+./deploy.sh logs
+
+# View specific service logs
+docker-compose logs api
+docker-compose logs worker
 ```
 
-## 🔧 Development
-
-### Building
+## 🛠️ Management Commands
 
 ```bash
-cargo build --release
+# Start the system
+./deploy.sh deploy
+
+# Stop the system
+./deploy.sh stop
+
+# Restart the system
+./deploy.sh restart
+
+# Check status
+./deploy.sh status
+
+# Test API
+./deploy.sh test
+
+# Clean up everything
+./deploy.sh cleanup
 ```
 
-### Running Tests
+## 🔧 Troubleshooting
+
+### Common Issues
+
+1. **Rustbox binary not found**
+
+    ```bash
+    cd ../rustbox-core
+    cargo build --release
+    cd ../rustbox-api
+    ./deploy.sh build
+    ```
+
+2. **Database connection failed**
+
+    ```bash
+    # Check if PostgreSQL is running
+    docker-compose ps postgres
+
+    # Check logs
+    docker-compose logs postgres
+    ```
+
+3. **Worker not processing jobs**
+
+    ```bash
+    # Check worker logs
+    docker-compose logs worker
+
+    # Check Redis connection
+    docker-compose exec redis redis-cli ping
+    ```
+
+### Debug Mode
+
+Enable debug mode for more detailed logging:
 
 ```bash
-# Unit tests
-cargo test
-
-# Integration tests (requires sudo)
-sudo ./run_tests.sh
-
-# Debug logging
-RUST_LOG=debug ./target/debug/rustbox run --box-id 0 /bin/echo "Hello"
+export DEBUG=true
+export LOG_LEVEL=DEBUG
+./deploy.sh restart
 ```
 
-### Contributing
+## 🔒 Security Considerations
 
-1. Follow Rust coding standards
-2. Add comprehensive tests for new features
-3. Update documentation
-4. Ensure all security tests pass
-5. Run full test suite before submitting
+-   **Sandboxing**: All code execution is isolated using rustbox
+-   **Resource Limits**: Strict limits on memory, CPU, and execution time
+-   **Network Isolation**: Network access is disabled by default
+-   **File System**: Restricted access to file system
+-   **Process Isolation**: Namespace isolation for security
 
-## 📊 Performance
+## 🤝 Contributing
 
-Typical performance characteristics:
-
-- **Startup Time**: <0.5 seconds
-- **Execution Overhead**: <0.2 seconds  
-- **Memory Usage**: <10MB base overhead
-- **Throughput**: >2 operations/second
-
-## 🔐 Security Considerations
-
-This tool is designed for **defensive security purposes only**:
-
-- Safe execution of untrusted code submissions
-- Programming contest environments
-- Code analysis and testing
-- Educational sandboxing
-
-**Important**: Ensure proper system hardening and monitoring when deploying in production environments.
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
 ## 📄 License
 
-This project is licensed under the terms specified in the LICENSE file.
-
-## 🤝 Support
-
-For issues, feature requests, or contributions, please refer to the project's issue tracking system.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 🙏 Acknowledgments
 
-Inspired by [IOI Isolate](https://github.com/ioi/isolate), the industry-standard sandbox for programming contests and secure code execution.
+-   Inspired by [codejudge](https://github.com/codejudge/codejudge)
+-   Built with [rustbox](https://github.com/your-org/rustbox) for secure sandboxing
+-   Powered by FastAPI, PostgreSQL, and Redis

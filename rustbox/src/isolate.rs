@@ -1,0 +1,609 @@
+/// Main isolate management interface
+use crate::executor::ProcessExecutor;
+use crate::lock_manager::BoxLockManager;
+use crate::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
+use std::time::Duration;
+
+
+
+/// Persistent isolate instance configuration
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct IsolateInstance {
+    config: IsolateConfig,
+    created_at: chrono::DateTime<chrono::Utc>,
+    last_used: chrono::DateTime<chrono::Utc>,
+}
+
+/// Main isolate manager for handling multiple isolated environments
+pub struct Isolate {
+    instance: IsolateInstance,
+    base_path: PathBuf,
+    lock_manager: Option<BoxLockManager>,
+}
+
+impl Isolate {
+    /// Extract box ID from instance_id (format: "rustbox/{box_id}")
+    fn extract_box_id(instance_id: &str) -> Result<u32> {
+        if let Some(box_id_str) = instance_id.strip_prefix("rustbox/") {
+            box_id_str.parse::<u32>()
+                .map_err(|_| IsolateError::Config(format!("Invalid box ID in instance_id: {}", instance_id)))
+        } else {
+            Err(IsolateError::Config(format!("Instance ID must start with 'rustbox/': {}", instance_id)))
+        }
+    }
+
+    /// Create a new isolate instance
+    pub fn new(config: IsolateConfig) -> Result<Self> {
+        let mut base_path = std::env::temp_dir();
+        base_path.push("rustbox");
+        base_path.push(&config.instance_id);
+
+        // Create base directory
+        fs::create_dir_all(&base_path).map_err(IsolateError::Io)?;
+
+        let instance = IsolateInstance {
+            config,
+            created_at: chrono::Utc::now(),
+            last_used: chrono::Utc::now(),
+        };
+
+        let mut isolate = Self {
+            instance,
+            base_path,
+            lock_manager: None,
+        };
+
+        // Acquire lock before any operations
+        isolate.acquire_lock(true)?;
+
+        // Save the new instance
+        isolate.atomic_instances_update(|instances| {
+            instances.insert(
+                isolate.instance.config.instance_id.clone(),
+                isolate.instance.clone(),
+            );
+        })?;
+
+        Ok(isolate)
+    }
+
+    /// Load an existing isolate instance
+    pub fn load(instance_id: &str) -> Result<Option<Self>> {
+        let mut config_file = std::env::temp_dir();
+        config_file.push("rustbox");
+        config_file.push("instances.json");
+
+        if !config_file.exists() {
+            return Ok(None);
+        }
+
+        let instances = Self::load_all_instances()?;
+        if let Some(instance) = instances.get(instance_id) {
+            let mut base_path = std::env::temp_dir();
+            base_path.push("rustbox");
+            base_path.push(instance_id);
+
+            if base_path.exists() {
+                let isolate = Self {
+                    instance: instance.clone(),
+                    base_path,
+                    lock_file: None,
+                };
+                // Don't acquire lock for load - only for exclusive operations
+                Ok(Some(isolate))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// List all isolate instances
+    pub fn list_all() -> Result<Vec<String>> {
+        let instances = Self::load_all_instances()?;
+        Ok(instances.keys().cloned().collect())
+    }
+
+    /// Execute a command in this isolate
+    pub fn execute(
+        &mut self,
+        command: &[String],
+        stdin_data: Option<&str>,
+    ) -> Result<ExecutionResult> {
+        // Acquire lock for execution to prevent conflicts
+        if self.lock_manager.is_none() {
+            self.acquire_lock(false)?;
+        }
+
+        // Update last used timestamp
+        self.instance.last_used = chrono::Utc::now();
+        self.save()?;
+
+        // Create executor with current config
+        let mut executor = ProcessExecutor::new(self.instance.config.clone())?;
+
+        // Execute the command
+        executor.execute(command, stdin_data)
+    }
+
+    /// Execute a command in this isolate with runtime resource overrides
+    pub fn execute_with_overrides(
+        &mut self,
+        command: &[String],
+        stdin_data: Option<&str>,
+        max_cpu: Option<u64>,
+        max_memory: Option<u64>,
+        max_time: Option<u64>,
+        fd_limit: Option<u64>,
+    ) -> Result<ExecutionResult> {
+        // Update last used timestamp
+        self.instance.last_used = chrono::Utc::now();
+        self.save()?;
+
+        // Clone config and apply overrides
+        let mut config = self.instance.config.clone();
+
+        if let Some(cpu_seconds) = max_cpu {
+            config.cpu_time_limit = Some(Duration::from_secs(cpu_seconds));
+            config.time_limit = Some(Duration::from_secs(cpu_seconds));
+        }
+
+        if let Some(memory_mb) = max_memory {
+            config.memory_limit = Some(memory_mb * 1024 * 1024); // Convert MB to bytes
+        }
+
+        if let Some(time_seconds) = max_time {
+            config.wall_time_limit = Some(Duration::from_secs(time_seconds));
+        }
+
+        if let Some(fd_limit_val) = fd_limit {
+            config.fd_limit = Some(fd_limit_val);
+        }
+
+        // Create executor with modified config
+        let mut executor = ProcessExecutor::new(config)?;
+
+        // Execute the command
+        executor.execute(command, stdin_data)
+    }
+
+    /// Execute code directly from string input (Judge0-style)
+    pub fn execute_code_string(
+        &mut self,
+        language: &str,
+        code: &str,
+        stdin_data: Option<&str>,
+        max_cpu: Option<u64>,
+        max_memory: Option<u64>,
+        max_time: Option<u64>,
+        fd_limit: Option<u64>,
+    ) -> Result<ExecutionResult> {
+        match language.to_lowercase().as_str() {
+            "python" | "py" => self
+                .execute_python_string(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
+            "cpp" | "c++" | "cxx" => self
+                .compile_and_execute_cpp(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
+            "java" => self.compile_and_execute_java(
+                code, stdin_data, max_cpu, max_memory, max_time, fd_limit,
+            ),
+            _ => Err(IsolateError::Config(format!(
+                "Unsupported language: {}",
+                language
+            ))),
+        }
+    }
+
+    /// Execute Python code directly from string
+    fn execute_python_string(
+        &mut self,
+        code: &str,
+        stdin_data: Option<&str>,
+        max_cpu: Option<u64>,
+        max_memory: Option<u64>,
+        max_time: Option<u64>,
+        fd_limit: Option<u64>,
+    ) -> Result<ExecutionResult> {
+        let command = vec![
+            "/usr/bin/python3".to_string(),
+            "-u".to_string(),
+            "-c".to_string(),
+            code.to_string(),
+        ];
+        self.execute_with_overrides(
+            &command, stdin_data, max_cpu, max_memory, max_time, fd_limit,
+        )
+    }
+
+    /// Compile and execute C++ code from string
+    fn compile_and_execute_cpp(
+        &mut self,
+        code: &str,
+        stdin_data: Option<&str>,
+        max_cpu: Option<u64>,
+        max_memory: Option<u64>,
+        max_time: Option<u64>,
+        fd_limit: Option<u64>,
+    ) -> Result<ExecutionResult> {
+        // Write source code to file in sandbox
+        let source_file = self.instance.config.workdir.join("solution.cpp");
+        fs::write(&source_file, code)?;
+
+        // Temporarily increase process limit for C++ compilation
+        let original_config = self.instance.config.clone();
+
+        // C++ compiler needs more processes for compilation phases
+        self.instance.config.process_limit = Some(30);
+
+        if max_memory.is_some() {
+            self.instance.config.memory_limit = Some(max_memory.unwrap() * 1024 * 1024);
+        } else {
+            self.instance.config.memory_limit = Some(256 * 1024 * 1024); // 256MB for C++
+        }
+
+        // Compile the code
+        let compile_command = vec![
+            "g++".to_string(),
+            "-o".to_string(),
+            "solution".to_string(),
+            "solution.cpp".to_string(),
+            "-std=c++17".to_string(),
+            "-O2".to_string(),
+        ];
+
+        let compile_result = self.execute(&compile_command, None)?;
+
+        if !compile_result.success {
+            // Restore original config
+            self.instance.config = original_config;
+            return Ok(ExecutionResult {
+                status: crate::types::ExecutionStatus::RuntimeError,
+                exit_code: compile_result.exit_code,
+                stdout: "".to_string(),
+                stderr: format!("Compilation Error:\n{}", compile_result.stderr),
+                wall_time: compile_result.wall_time,
+                cpu_time: compile_result.cpu_time,
+                memory_peak: compile_result.memory_peak,
+                success: false,
+                signal: None,
+                error_message: Some("Compilation failed".to_string()),
+            });
+        }
+
+        // Execute the compiled binary
+        let execute_command = vec!["./solution".to_string()];
+        let result = self.execute_with_overrides(
+            &execute_command,
+            stdin_data,
+            max_cpu,
+            max_memory,
+            max_time,
+            fd_limit,
+        );
+
+        // Restore original config
+        self.instance.config = original_config;
+        result
+    }
+
+    /// Compile and execute Java code from string
+    fn compile_and_execute_java(
+        &mut self,
+        code: &str,
+        stdin_data: Option<&str>,
+        max_cpu: Option<u64>,
+        max_memory: Option<u64>,
+        max_time: Option<u64>,
+        fd_limit: Option<u64>,
+    ) -> Result<ExecutionResult> {
+        // Extract class name from code (simple heuristic)
+        let class_name = self
+            .extract_java_class_name(code)
+            .unwrap_or("Main".to_string());
+        let source_file = self
+            .instance
+            .config
+            .workdir
+            .join(format!("{}.java", class_name));
+        fs::write(&source_file, code)?;
+
+        // Java needs relaxed isolation settings due to JVM threading requirements
+        // Temporarily modify config for Java compilation and execution
+        let original_config = self.instance.config.clone();
+
+        // Relax isolation for Java (JVM requires more system access)
+        self.instance.config.enable_pid_namespace = false;
+        self.instance.config.enable_network_namespace = false;
+
+        // Increase resource limits for JVM
+        if max_memory.is_some() {
+            self.instance.config.memory_limit = Some(max_memory.unwrap() * 1024 * 1024);
+        } else {
+            self.instance.config.memory_limit = Some(512 * 1024 * 1024); // 512MB default for Java
+        }
+
+        // Increase process limit for JVM threads
+        self.instance.config.process_limit = Some(50);
+
+        // Compile the code with relaxed settings
+        let compile_command = vec![
+            "javac".to_string(),
+            "-cp".to_string(),
+            ".".to_string(),
+            format!("{}.java", class_name),
+        ];
+
+        let compile_result = self.execute(&compile_command, None)?;
+
+        if !compile_result.success {
+            // Restore original config
+            self.instance.config = original_config;
+            return Ok(ExecutionResult {
+                status: crate::types::ExecutionStatus::RuntimeError,
+                exit_code: compile_result.exit_code,
+                stdout: "".to_string(),
+                stderr: format!("Java Compilation Error:\n{}", compile_result.stderr),
+                wall_time: compile_result.wall_time,
+                cpu_time: compile_result.cpu_time,
+                memory_peak: compile_result.memory_peak,
+                success: false,
+                signal: None,
+                error_message: Some("Java compilation failed".to_string()),
+            });
+        }
+
+        // Execute the compiled class with relaxed settings
+        let execute_command = vec![
+            "java".to_string(),
+            "-cp".to_string(),
+            ".".to_string(),
+            class_name,
+        ];
+
+        let result = self.execute_with_overrides(
+            &execute_command,
+            stdin_data,
+            max_cpu,
+            max_memory,
+            max_time,
+            fd_limit,
+        );
+
+        // Restore original config
+        self.instance.config = original_config;
+
+        result
+    }
+
+    /// Extract Java class name from source code (simple regex-based extraction)
+    fn extract_java_class_name(&self, code: &str) -> Option<String> {
+        // Look for "public class ClassName" pattern
+        for line in code.lines() {
+            let line = line.trim();
+            if line.starts_with("public class ") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let class_name = parts[2].trim_end_matches('{').trim();
+                    return Some(class_name.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Clean up this isolate instance
+    pub fn cleanup(mut self) -> Result<()> {
+        let instance_id = self.instance.config.instance_id.clone();
+
+        // Acquire lock for cleanup to prevent conflicts
+        if self.lock_manager.is_none() {
+            self.acquire_lock(false)?;
+        }
+
+        // Remove from storage atomically
+        self.atomic_instances_update(|instances| {
+            instances.remove(&instance_id);
+        })?;
+
+        // Clean up filesystem
+        if self.base_path.exists() {
+            fs::remove_dir_all(&self.base_path).map_err(IsolateError::Io)?;
+        }
+
+        // Release lock before removing lock file
+        self.release_lock();
+
+        // Lock will be automatically released by BoxLockManager when dropped
+
+        Ok(())
+    }
+
+    /// Get configuration
+    pub fn config(&self) -> &IsolateConfig {
+        &self.instance.config
+    }
+
+    /// Add directory bindings to the isolate configuration
+    pub fn add_directory_bindings(
+        &mut self,
+        bindings: Vec<crate::types::DirectoryBinding>,
+    ) -> Result<()> {
+        // Validate all bindings before applying any
+        for binding in &bindings {
+            // Check if source exists (unless maybe flag is set)
+            if !binding.maybe && !binding.source.exists() {
+                return Err(IsolateError::Config(format!(
+                    "Source directory does not exist: {}",
+                    binding.source.display()
+                )));
+            }
+
+            // Validate source is actually a directory
+            if binding.source.exists() && !binding.source.is_dir() {
+                return Err(IsolateError::Config(format!(
+                    "Source path is not a directory: {}",
+                    binding.source.display()
+                )));
+            }
+
+            // Validate target path format
+            if binding.target.is_absolute() && binding.target.starts_with("/") {
+                // This is good - absolute path in sandbox
+            } else {
+                return Err(IsolateError::Config(format!(
+                    "Target path must be absolute (start with /): {}",
+                    binding.target.display()
+                )));
+            }
+        }
+
+        // Add bindings to configuration
+        self.instance.config.directory_bindings.extend(bindings);
+
+        // Update last_used timestamp
+        self.instance.last_used = chrono::Utc::now();
+
+        // Save updated configuration
+        self.save()?;
+
+        Ok(())
+    }
+
+    /// Save instance configuration with atomic operations
+    pub fn save(&self) -> Result<()> {
+        self.atomic_instances_update(|instances| {
+            instances.insert(
+                self.instance.config.instance_id.clone(),
+                self.instance.clone(),
+            );
+        })
+    }
+
+    /// Load all instances from storage
+    fn load_all_instances() -> Result<HashMap<String, IsolateInstance>> {
+        let mut config_file = std::env::temp_dir();
+        config_file.push("rustbox");
+
+        // Create directory if it doesn't exist
+        if !config_file.exists() {
+            fs::create_dir_all(&config_file)?;
+        }
+
+        config_file.push("instances.json");
+
+        if !config_file.exists() {
+            return Ok(HashMap::new());
+        }
+
+        let content = fs::read_to_string(config_file)?;
+        if content.trim().is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let instances: HashMap<String, IsolateInstance> = serde_json::from_str(&content)
+            .map_err(|e| IsolateError::Config(format!("Failed to parse instances: {}", e)))?;
+
+        Ok(instances)
+    }
+
+    /// Acquire exclusive lock for this isolate instance using BoxLockManager
+    fn acquire_lock(&mut self, is_init: bool) -> Result<()> {
+        // Extract box_id from instance_id
+        let box_id = Self::extract_box_id(&self.instance.config.instance_id)?;
+        
+        // Create and configure BoxLockManager
+        let mut lock_manager = BoxLockManager::new(box_id);
+        
+        // Acquire the lock
+        lock_manager.acquire_lock(is_init)?;
+        
+        // Store the lock manager
+        self.lock_manager = Some(lock_manager);
+        Ok(())
+    }
+
+    /// Atomic update of instances.json with file locking
+    fn atomic_instances_update<F>(&self, update_fn: F) -> Result<()>
+    where
+        F: FnOnce(&mut HashMap<String, IsolateInstance>),
+    {
+        let instances_dir = std::env::temp_dir().join("rustbox");
+        fs::create_dir_all(&instances_dir)?;
+
+        let instances_file = instances_dir.join("instances.json");
+        let instances_lock = instances_dir.join("instances.lock");
+
+        // Acquire global instances file lock
+        let lock_file = File::create(&instances_lock)?;
+
+        #[cfg(unix)]
+        {
+            let result = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX) };
+            if result != 0 {
+                let errno = std::io::Error::last_os_error();
+                return Err(IsolateError::Lock(format!(
+                    "Cannot lock instances file: {}",
+                    errno
+                )));
+            }
+        }
+
+        // Load current instances
+        let mut instances = if instances_file.exists() {
+            let content = fs::read_to_string(&instances_file)?;
+            if content.trim().is_empty() {
+                HashMap::new()
+            } else {
+                serde_json::from_str(&content).map_err(|e| {
+                    IsolateError::Config(format!("Failed to parse instances: {}", e))
+                })?
+            }
+        } else {
+            HashMap::new()
+        };
+
+        // Apply update
+        update_fn(&mut instances);
+
+        // Write atomically (write to temp file, then rename)
+        let temp_file = instances_dir.join("instances.json.tmp");
+        let content = serde_json::to_string_pretty(&instances)
+            .map_err(|e| IsolateError::Config(format!("Failed to serialize instances: {}", e)))?;
+
+        fs::write(&temp_file, content)?;
+        fs::rename(&temp_file, &instances_file)?;
+
+        // Lock is automatically released when lock_file goes out of scope
+        Ok(())
+    }
+
+    /// Acquire execution lock for loaded isolate (public version of acquire_lock)
+    pub fn acquire_execution_lock(&mut self) -> Result<()> {
+        if self.lock_manager.is_some() {
+            return Ok(()); // Already have lock
+        }
+        self.acquire_lock(false)
+    }
+
+    /// Release the lock (happens automatically on drop)
+    fn release_lock(&mut self) {
+        if let Some(ref mut lock_manager) = self.lock_manager {
+            if let Err(e) = lock_manager.remove_lock() {
+                eprintln!("Warning: Failed to release lock: {}", e);
+            }
+        }
+        self.lock_manager = None;
+    }
+}
+
+impl Drop for Isolate {
+    fn drop(&mut self) {
+        // Lock is automatically released when file descriptor is closed
+        self.release_lock();
+    }
+}

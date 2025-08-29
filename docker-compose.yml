@@ -1,0 +1,152 @@
+services:
+    # PostgreSQL Database
+    postgres:
+        image: postgres:15-alpine
+        container_name: codejudge-postgres
+        environment:
+            POSTGRES_DB: codejudge
+            POSTGRES_USER: codejudge
+            POSTGRES_PASSWORD: codejudge
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+            - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+        ports:
+            - "5432:5432"
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U codejudge -d codejudge"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+        networks:
+            - codejudge-network
+
+    # Redis Queue
+    redis:
+        image: redis:7-alpine
+        container_name: codejudge-redis
+        ports:
+            - "6379:6379"
+        volumes:
+            - redis_data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+        networks:
+            - codejudge-network
+
+    # FastAPI Web Server
+    api:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: codejudge-api
+        privileged: true
+        environment:
+            - DATABASE_URL=postgresql://codejudge:codejudge@postgres:5432/codejudge
+            - REDIS_URL=redis://redis:6379/0
+            - RUSTBOX_BINARY_PATH=/usr/local/bin/rustbox
+            - RUSTBOX_WORK_DIR=/tmp/rustbox
+            - HOST=0.0.0.0
+            - PORT=8000
+            - DEBUG=false
+            - LOG_LEVEL=INFO
+            - PYTHON_COMPILER_PATH=/usr/local/bin/python3
+            - CPP_COMPILER_PATH=g++
+            - JAVA_COMPILER_PATH=javac
+            - JAVA_RUNTIME_PATH=java
+        ports:
+            - "8000:8000"
+        volumes:
+            - ./target/release/rustbox:/usr/local/bin/rustbox:ro
+            - rustbox_work:/tmp/rustbox
+            - /sys/fs/cgroup:/sys/fs/cgroup:rw
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:8000/ping"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+        networks:
+            - codejudge-network
+        restart: unless-stopped
+
+    # Worker Process
+    worker:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        command: python -m app.worker
+        privileged: true
+        environment:
+            - DATABASE_URL=postgresql://codejudge:codejudge@postgres:5432/codejudge
+            - REDIS_URL=redis://redis:6379/0
+            - RUSTBOX_BINARY_PATH=/usr/local/bin/rustbox
+            - RUSTBOX_WORK_DIR=/tmp/rustbox
+            - LOG_LEVEL=INFO
+            - WORKER_CONCURRENCY=4
+            - PYTHON_COMPILER_PATH=/usr/local/bin/python3
+            - CPP_COMPILER_PATH=g++
+            - JAVA_COMPILER_PATH=javac
+            - JAVA_RUNTIME_PATH=java
+        volumes:
+            - ./target/release/rustbox:/usr/local/bin/rustbox:ro
+            - rustbox_work:/tmp/rustbox
+            - /sys/fs/cgroup:/sys/fs/cgroup:rw
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+            api:
+                condition: service_healthy
+        networks:
+            - codejudge-network
+        restart: unless-stopped
+        deploy:
+            replicas: 2
+
+    # Flower (Celery monitoring - optional)
+    flower:
+        image: mher/flower:1.0
+        container_name: codejudge-flower
+        environment:
+            - FLOWER_PORT=5555
+        ports:
+            - "5555:5555"
+        depends_on:
+            - redis
+        networks:
+            - codejudge-network
+        profiles:
+            - monitoring
+
+    # Nginx (optional reverse proxy)
+    nginx:
+        image: nginx:alpine
+        container_name: codejudge-nginx
+        ports:
+            - "80:80"
+            - "443:443"
+        volumes:
+            - ./nginx.conf:/etc/nginx/nginx.conf:ro
+        depends_on:
+            - api
+        networks:
+            - codejudge-network
+        profiles:
+            - production
+
+volumes:
+    postgres_data:
+    redis_data:
+    rustbox_work:
+
+networks:
+    codejudge-network:
+        driver: bridge

@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -71,7 +71,10 @@ impl Isolate {
 
         // Save the new instance
         isolate.atomic_instances_update(|instances| {
-            instances.insert(isolate.instance.config.instance_id.clone(), isolate.instance.clone());
+            instances.insert(
+                isolate.instance.config.instance_id.clone(),
+                isolate.instance.clone(),
+            );
         })?;
 
         Ok(isolate)
@@ -178,65 +181,6 @@ impl Isolate {
         executor.execute(command, stdin_data)
     }
 
-
-    /// Execute a single file
-    pub fn execute_file(
-        &mut self,
-        file_path: &Path,
-        stdin_data: Option<&str>,
-    ) -> Result<ExecutionResult> {
-        if !file_path.exists() {
-            return Err(IsolateError::Config(format!(
-                "File not found: {}",
-                file_path.display()
-            )));
-        }
-
-        // Copy file to working directory
-        let filename = file_path
-            .file_name()
-            .ok_or_else(|| IsolateError::Config("Invalid file path".to_string()))?;
-
-        let dest_path = self.instance.config.workdir.join(filename);
-        fs::copy(file_path, &dest_path)?;
-
-        // Determine execution command based on file extension
-        let command = self.get_execution_command(&dest_path)?;
-
-        self.execute(&command, stdin_data)
-    }
-
-    /// Execute a single file with runtime resource overrides
-    pub fn execute_file_with_overrides(
-        &mut self,
-        file_path: &Path,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        fd_limit: Option<u64>,
-    ) -> Result<ExecutionResult> {
-        if !file_path.exists() {
-            return Err(IsolateError::Config(format!(
-                "File not found: {}",
-                file_path.display()
-            )));
-        }
-
-        // Copy file to working directory
-        let filename = file_path
-            .file_name()
-            .ok_or_else(|| IsolateError::Config("Invalid file path".to_string()))?;
-
-        let dest_path = self.instance.config.workdir.join(filename);
-        fs::copy(file_path, &dest_path)?;
-
-        // Determine execution command based on file extension
-        let command = self.get_execution_command(&dest_path)?;
-
-        self.execute_with_overrides(&command, stdin_data, max_cpu, max_memory, max_time, fd_limit)
-    }
-
     /// Execute code directly from string input (Judge0-style)
     pub fn execute_code_string(
         &mut self,
@@ -249,14 +193,17 @@ impl Isolate {
         fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
-            "python" | "py" => self.execute_python_string(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
-            "cpp" | "c++" | "cxx" => self.compile_and_execute_cpp(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
-            "c" => self.compile_and_execute_c(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
-            "java" => self.compile_and_execute_java(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
-            "javascript" | "js" | "node" => self.execute_javascript_string(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
-            "rust" | "rs" => self.compile_and_execute_rust(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
-            "go" | "golang" => self.compile_and_execute_go(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
-            _ => Err(IsolateError::Config(format!("Unsupported language: {}", language)))
+            "python" | "py" => self
+                .execute_python_string(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
+            "cpp" | "c++" | "cxx" => self
+                .compile_and_execute_cpp(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
+            "java" => self.compile_and_execute_java(
+                code, stdin_data, max_cpu, max_memory, max_time, fd_limit,
+            ),
+            _ => Err(IsolateError::Config(format!(
+                "Unsupported language: {}",
+                language
+            ))),
         }
     }
 
@@ -271,30 +218,14 @@ impl Isolate {
         fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         let command = vec![
-            "/usr/bin/python3".to_string(),
+            std::env::var("PYTHON_COMPILER_PATH").unwrap_or_else(|_| "/usr/bin/python3".to_string()),
             "-u".to_string(),
             "-c".to_string(),
-            code.to_string()
+            code.to_string(),
         ];
-        self.execute_with_overrides(&command, stdin_data, max_cpu, max_memory, max_time, fd_limit)
-    }
-
-    /// Execute JavaScript code directly from string
-    fn execute_javascript_string(
-        &mut self,
-        code: &str,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        fd_limit: Option<u64>,
-    ) -> Result<ExecutionResult> {
-        let command = vec![
-            "node".to_string(),
-            "-e".to_string(),
-            code.to_string()
-        ];
-        self.execute_with_overrides(&command, stdin_data, max_cpu, max_memory, max_time, fd_limit)
+        self.execute_with_overrides(
+            &command, stdin_data, max_cpu, max_memory, max_time, fd_limit,
+        )
     }
 
     /// Compile and execute C++ code from string
@@ -311,19 +242,33 @@ impl Isolate {
         let source_file = self.instance.config.workdir.join("solution.cpp");
         fs::write(&source_file, code)?;
 
+        // Temporarily increase process limit for C++ compilation
+        let original_config = self.instance.config.clone();
+
+        // C++ compiler needs more processes for compilation phases
+        self.instance.config.process_limit = Some(30);
+
+        if max_memory.is_some() {
+            self.instance.config.memory_limit = Some(max_memory.unwrap() * 1024 * 1024);
+        } else {
+            self.instance.config.memory_limit = Some(256 * 1024 * 1024); // 256MB for C++
+        }
+
         // Compile the code
         let compile_command = vec![
-            "g++".to_string(),
+            std::env::var("CPP_COMPILER_PATH").unwrap_or_else(|_| "g++".to_string()),
             "-o".to_string(),
             "solution".to_string(),
             "solution.cpp".to_string(),
             "-std=c++17".to_string(),
-            "-O2".to_string()
+            "-O2".to_string(),
         ];
 
         let compile_result = self.execute(&compile_command, None)?;
-        
+
         if !compile_result.success {
+            // Restore original config
+            self.instance.config = original_config;
             return Ok(ExecutionResult {
                 status: crate::types::ExecutionStatus::RuntimeError,
                 exit_code: compile_result.exit_code,
@@ -340,53 +285,18 @@ impl Isolate {
 
         // Execute the compiled binary
         let execute_command = vec!["./solution".to_string()];
-        self.execute_with_overrides(&execute_command, stdin_data, max_cpu, max_memory, max_time, fd_limit)
-    }
+        let result = self.execute_with_overrides(
+            &execute_command,
+            stdin_data,
+            max_cpu,
+            max_memory,
+            max_time,
+            fd_limit,
+        );
 
-    /// Compile and execute C code from string
-    fn compile_and_execute_c(
-        &mut self,
-        code: &str,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        fd_limit: Option<u64>,
-    ) -> Result<ExecutionResult> {
-        // Write source code to file in sandbox
-        let source_file = self.instance.config.workdir.join("solution.c");
-        fs::write(&source_file, code)?;
-
-        // Compile the code
-        let compile_command = vec![
-            "gcc".to_string(),
-            "-o".to_string(),
-            "solution".to_string(),
-            "solution.c".to_string(),
-            "-std=c11".to_string(),
-            "-O2".to_string()
-        ];
-
-        let compile_result = self.execute(&compile_command, None)?;
-        
-        if !compile_result.success {
-            return Ok(ExecutionResult {
-                status: crate::types::ExecutionStatus::RuntimeError,
-                exit_code: compile_result.exit_code,
-                stdout: "".to_string(),
-                stderr: format!("Compilation Error:\n{}", compile_result.stderr),
-                wall_time: compile_result.wall_time,
-                cpu_time: compile_result.cpu_time,
-                memory_peak: compile_result.memory_peak,
-                success: false,
-                signal: None,
-                error_message: Some("Compilation failed".to_string()),
-            });
-        }
-
-        // Execute the compiled binary
-        let execute_command = vec!["./solution".to_string()];
-        self.execute_with_overrides(&execute_command, stdin_data, max_cpu, max_memory, max_time, fd_limit)
+        // Restore original config
+        self.instance.config = original_config;
+        result
     }
 
     /// Compile and execute Java code from string
@@ -400,38 +310,44 @@ impl Isolate {
         fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         // Extract class name from code (simple heuristic)
-        let class_name = self.extract_java_class_name(code).unwrap_or("Main".to_string());
-        let source_file = self.instance.config.workdir.join(format!("{}.java", class_name));
+        let class_name = self
+            .extract_java_class_name(code)
+            .unwrap_or("Main".to_string());
+        let source_file = self
+            .instance
+            .config
+            .workdir
+            .join(format!("{}.java", class_name));
         fs::write(&source_file, code)?;
 
         // Java needs relaxed isolation settings due to JVM threading requirements
         // Temporarily modify config for Java compilation and execution
         let original_config = self.instance.config.clone();
-        
+
         // Relax isolation for Java (JVM requires more system access)
         self.instance.config.enable_pid_namespace = false;
         self.instance.config.enable_network_namespace = false;
-        
+
         // Increase resource limits for JVM
         if max_memory.is_some() {
             self.instance.config.memory_limit = Some(max_memory.unwrap() * 1024 * 1024);
         } else {
             self.instance.config.memory_limit = Some(512 * 1024 * 1024); // 512MB default for Java
         }
-        
+
         // Increase process limit for JVM threads
         self.instance.config.process_limit = Some(50);
 
         // Compile the code with relaxed settings
         let compile_command = vec![
-            "javac".to_string(),
+            std::env::var("JAVA_COMPILER_PATH").unwrap_or_else(|_| "javac".to_string()),
             "-cp".to_string(),
             ".".to_string(),
-            format!("{}.java", class_name)
+            format!("{}.java", class_name),
         ];
 
         let compile_result = self.execute(&compile_command, None)?;
-        
+
         if !compile_result.success {
             // Restore original config
             self.instance.config = original_config;
@@ -451,134 +367,24 @@ impl Isolate {
 
         // Execute the compiled class with relaxed settings
         let execute_command = vec![
-            "java".to_string(),
+            std::env::var("JAVA_RUNTIME_PATH").unwrap_or_else(|_| "java".to_string()),
             "-cp".to_string(),
             ".".to_string(),
-            class_name
+            class_name,
         ];
-        
-        let result = self.execute_with_overrides(&execute_command, stdin_data, max_cpu, max_memory, max_time, fd_limit);
-        
+
+        let result = self.execute_with_overrides(
+            &execute_command,
+            stdin_data,
+            max_cpu,
+            max_memory,
+            max_time,
+            fd_limit,
+        );
+
         // Restore original config
         self.instance.config = original_config;
-        
-        result
-    }
 
-    /// Compile and execute Rust code from string
-    fn compile_and_execute_rust(
-        &mut self,
-        code: &str,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        fd_limit: Option<u64>,
-    ) -> Result<ExecutionResult> {
-        // Write source code to file in sandbox
-        let source_file = self.instance.config.workdir.join("solution.rs");
-        fs::write(&source_file, code)?;
-
-        // Compile the code
-        let compile_command = vec![
-            "rustc".to_string(),
-            "-o".to_string(),
-            "solution".to_string(),
-            "solution.rs".to_string(),
-            "-O".to_string()
-        ];
-
-        let compile_result = self.execute(&compile_command, None)?;
-        
-        if !compile_result.success {
-            return Ok(ExecutionResult {
-                status: crate::types::ExecutionStatus::RuntimeError,
-                exit_code: compile_result.exit_code,
-                stdout: "".to_string(),
-                stderr: format!("Compilation Error:\n{}", compile_result.stderr),
-                wall_time: compile_result.wall_time,
-                cpu_time: compile_result.cpu_time,
-                memory_peak: compile_result.memory_peak,
-                success: false,
-                signal: None,
-                error_message: Some("Compilation failed".to_string()),
-            });
-        }
-
-        // Execute the compiled binary
-        let execute_command = vec!["./solution".to_string()];
-        self.execute_with_overrides(&execute_command, stdin_data, max_cpu, max_memory, max_time, fd_limit)
-    }
-
-    /// Compile and execute Go code from string
-    fn compile_and_execute_go(
-        &mut self,
-        code: &str,
-        stdin_data: Option<&str>,
-        max_cpu: Option<u64>,
-        max_memory: Option<u64>,
-        max_time: Option<u64>,
-        fd_limit: Option<u64>,
-    ) -> Result<ExecutionResult> {
-        // Write source code to file in sandbox
-        let source_file = self.instance.config.workdir.join("solution.go");
-        fs::write(&source_file, code)?;
-
-        // Go needs extremely relaxed settings due to its toolchain and runtime requirements
-        let original_config = self.instance.config.clone();
-        
-        // Disable namespace isolation for Go (like Java) - Go runtime conflicts with PID namespace
-        self.instance.config.enable_pid_namespace = false;
-        self.instance.config.enable_network_namespace = false;
-        
-        // Increase resource limits significantly for Go compilation
-        if max_memory.is_some() {
-            self.instance.config.memory_limit = Some(max_memory.unwrap() * 1024 * 1024);
-        } else {
-            self.instance.config.memory_limit = Some(256 * 1024 * 1024); // Test 128MB - realistic for 10^5 benchmark
-        }
-        
-        // Go toolchain needs processes - will be optimized via binary search
-        self.instance.config.process_limit = Some(60);
-        
-        // Go file descriptor limit - optimized for realistic workloads
-        self.instance.config.fd_limit = Some(128);
-
-        // Compile the code using go build
-        let compile_command = vec![
-            "go".to_string(),
-            "build".to_string(),
-            "-o".to_string(),
-            "solution".to_string(),
-            "solution.go".to_string()
-        ];
-
-        let compile_result = self.execute(&compile_command, None)?;
-        
-        if !compile_result.success {
-            // Restore original config
-            self.instance.config = original_config;
-            return Ok(ExecutionResult {
-                status: crate::types::ExecutionStatus::RuntimeError,
-                exit_code: compile_result.exit_code,
-                stdout: "".to_string(),
-                stderr: format!("Go Compilation Error:\n{}", compile_result.stderr),
-                wall_time: compile_result.wall_time,
-                cpu_time: compile_result.cpu_time,
-                memory_peak: compile_result.memory_peak,
-                success: false,
-                signal: None,
-                error_message: Some("Go compilation failed".to_string()),
-            });
-        }
-
-        // Execute the compiled binary
-        let execute_command = vec!["./solution".to_string()];
-        let result = self.execute_with_overrides(&execute_command, stdin_data, max_cpu, max_memory, max_time, fd_limit);
-        
-        // Restore original config
-        self.instance.config = original_config;
-        
         result
     }
 
@@ -596,75 +402,6 @@ impl Isolate {
             }
         }
         None
-    }
-
-    /// Get execution command based on file extension
-    fn get_execution_command(&self, file_path: &Path) -> Result<Vec<String>> {
-        let extension = file_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        let filename = file_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| IsolateError::Config("Invalid filename".to_string()))?;
-
-        match extension.to_lowercase().as_str() {
-            "py" => Ok(vec![
-                "/usr/bin/python3".to_string(),
-                "-u".to_string(),
-                filename.to_string(),
-            ]),
-            "js" => Ok(vec!["node".to_string(), filename.to_string()]),
-            "sh" => Ok(vec![
-                "/bin/bash".to_string(),
-                filename.to_string(),
-            ]),
-            "c" => {
-                let executable = filename.strip_suffix(".c").unwrap_or("main");
-                Ok(vec![
-                    "sh".to_string(),
-                    "-c".to_string(),
-                    format!("gcc -o {} {} && ./{}", executable, filename, executable),
-                ])
-            }
-            "cpp" | "cc" | "cxx" => {
-                let executable = filename
-                    .strip_suffix(&format!(".{}", extension))
-                    .unwrap_or("main");
-                Ok(vec![
-                    "sh".to_string(),
-                    "-c".to_string(),
-                    format!("g++ -o {} {} && ./{}", executable, filename, executable),
-                ])
-            }
-            "rs" => {
-                let executable = filename.strip_suffix(".rs").unwrap_or("main");
-                Ok(vec![
-                    "sh".to_string(),
-                    "-c".to_string(),
-                    format!("rustc -o {} {} && ./{}", executable, filename, executable),
-                ])
-            }
-            "go" => Ok(vec![
-                "sh".to_string(),
-                "-c".to_string(),
-                format!("go run {}", filename),
-            ]),
-            "java" => {
-                let classname = filename.strip_suffix(".java").unwrap_or("Main");
-                Ok(vec![
-                    "sh".to_string(),
-                    "-c".to_string(),
-                    format!("javac {} && java {}", filename, classname),
-                ])
-            }
-            _ => {
-                // Try to execute directly (assume it's a script with shebang)
-                Ok(vec![format!("./{}", filename)])
-            }
-        }
     }
 
     /// Clean up this isolate instance
@@ -708,7 +445,10 @@ impl Isolate {
     }
 
     /// Add directory bindings to the isolate configuration
-    pub fn add_directory_bindings(&mut self, bindings: Vec<crate::types::DirectoryBinding>) -> Result<()> {
+    pub fn add_directory_bindings(
+        &mut self,
+        bindings: Vec<crate::types::DirectoryBinding>,
+    ) -> Result<()> {
         // Validate all bindings before applying any
         for binding in &bindings {
             // Check if source exists (unless maybe flag is set)
@@ -740,13 +480,13 @@ impl Isolate {
 
         // Add bindings to configuration
         self.instance.config.directory_bindings.extend(bindings);
-        
+
         // Update last_used timestamp
         self.instance.last_used = chrono::Utc::now();
-        
+
         // Save updated configuration
         self.save()?;
-        
+
         Ok(())
     }
 
@@ -796,10 +536,12 @@ impl Isolate {
         let lock_path = lock_dir.join(&lock_filename);
 
         // Open lock file with read/write/create permissions, but without truncating.
+        // For non-init operations, always try to create the file if it doesn't exist
+        // This handles the case where the lock file was deleted externally
         let mut lock_file = fs::OpenOptions::new()
             .read(true)
             .write(true)
-            .create(is_init)
+            .create(true) // Always allow creation
             .open(&lock_path)
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
@@ -936,6 +678,14 @@ impl Isolate {
 
         // Lock is automatically released when lock_file goes out of scope
         Ok(())
+    }
+
+    /// Acquire execution lock for loaded isolate (public version of acquire_lock)
+    pub fn acquire_execution_lock(&mut self) -> Result<()> {
+        if self.lock_file.is_some() {
+            return Ok(()); // Already have lock
+        }
+        self.acquire_lock(false)
     }
 
     /// Release the lock (happens automatically on drop)

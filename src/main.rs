@@ -1,19 +1,21 @@
+use anyhow::Result;
+use clap::{Parser, Subcommand};
 /// rustbox: Secure Process Isolation and Resource Control System
-/// 
+///
 /// A modern, Rust-based implementation inspired by IOI Isolate, designed for secure
 /// execution of untrusted code with comprehensive resource limits and namespace isolation.
-/// 
+///
 /// # Security Features
 /// - Namespace isolation (PID, mount, network, user)
 /// - Resource limits enforcement (memory, CPU, file size, etc.)
 /// - Cgroups v1 support for maximum compatibility
 /// - Path validation to prevent directory traversal
 /// - Memory-safe implementation in Rust
-/// 
+///
 /// # Platform Support
 /// - Primary: Linux with cgroups v1 support
 /// - Secondary: Unix-like systems with limited functionality
-/// 
+///
 /// # Usage
 /// ```bash
 /// rustbox init --box-id 0
@@ -21,18 +23,6 @@
 /// rustbox cleanup --box-id 0
 /// ```
 use rustbox::*;
-use anyhow::Result;
-use clap::{Parser, Subcommand};
-
-
-
-
-
-
-
-
-
-
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -80,7 +70,7 @@ enum Commands {
         /// Box ID for the sandbox
         #[arg(long)]
         box_id: u32,
-        /// Programming language (python, cpp, c, java, javascript, etc.)
+        /// Programming language (python, c and java)
         #[arg(long)]
         language: String,
         /// Source code as string
@@ -107,6 +97,12 @@ enum Commands {
         /// Strict mode: require root privileges and fail if security features unavailable
         #[arg(long)]
         strict: bool,
+        /// Security profile to apply (strict, development, contest)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Path to language limits configuration file
+        #[arg(long)]
+        config: Option<String>,
     },
     /// Clean up sandbox environment
     Cleanup {
@@ -132,10 +128,10 @@ fn main() -> Result<()> {
         eprintln!("Current platform does not support necessary isolation mechanisms");
         std::process::exit(1);
     }
-    
+
     // Parse command line arguments
     let cli = Cli::parse();
-    
+
     // Privilege check - many security features require elevated permissions
     if unsafe { libc::getuid() } != 0 {
         eprintln!("Warning: rustbox may require root privileges for full functionality");
@@ -147,31 +143,31 @@ fn main() -> Result<()> {
 
     // Security subsystem availability checks
     perform_security_checks();
-    
+
     // Execute the appropriate command
     match cli.command {
         Commands::Init { box_id } => {
             eprintln!("Initializing sandbox with box-id: {}", box_id);
-            
+
             let mut config = rustbox::types::IsolateConfig::default();
             config.instance_id = format!("rustbox/{}", box_id);
             // The workdir will be created under /tmp/rustbox/{instance_id}/ by default
             // So we don't need to override it, just use the default behavior
             config.strict_mode = false;
-            
+
             let _isolate = rustbox::isolate::Isolate::new(config)?;
             eprintln!("Sandbox initialized successfully");
             Ok(())
         }
-        Commands::Run { 
-            box_id, 
-            mem, 
-            time, 
-            cpu, 
-            wall_time, 
+        Commands::Run {
+            box_id,
+            mem,
+            time,
+            cpu,
+            wall_time,
             processes,
-            directory_bindings, 
-            command 
+            directory_bindings,
+            command,
         } => {
             eprintln!("Running command in sandbox {}: {:?}", box_id, command);
             if let Some(mem) = mem {
@@ -194,16 +190,30 @@ fn main() -> Result<()> {
             let mut isolate = rustbox::isolate::Isolate::load(&instance_id)?
                 .ok_or_else(|| anyhow::anyhow!("Sandbox {} not found. Run init first.", box_id))?;
 
+            // Acquire lock for exclusive execution to prevent concurrent access
+            if let Err(e) = isolate.acquire_execution_lock() {
+                match e {
+                    rustbox::types::IsolateError::LockBusy => {
+                        eprintln!("Error: Lock already held by process");
+                        eprintln!("Another process is currently using sandbox {}", box_id);
+                        std::process::exit(1);
+                    }
+                    _ => return Err(e.into()),
+                }
+            }
+
             // Parse and apply directory bindings
             if !directory_bindings.is_empty() {
                 let mut bindings = Vec::new();
                 for binding_str in &directory_bindings {
                     match rustbox::types::DirectoryBinding::parse(binding_str) {
                         Ok(binding) => {
-                            eprintln!("Directory binding: {} -> {} ({:?})", 
-                                     binding.source.display(), 
-                                     binding.target.display(), 
-                                     binding.permissions);
+                            eprintln!(
+                                "Directory binding: {} -> {} ({:?})",
+                                binding.source.display(),
+                                binding.target.display(),
+                                binding.permissions
+                            );
                             bindings.push(binding);
                         }
                         Err(e) => {
@@ -218,27 +228,32 @@ fn main() -> Result<()> {
             if command.is_empty() {
                 // No command specified - look for standardized pattern /tmp/<box-id>.py in sandbox
                 let standard_filename = format!("{}.py", box_id);
-                let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                let sandbox_work_dir =
+                    std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
                 let standard_path = sandbox_work_dir.join(&standard_filename);
-                
+
                 if standard_path.exists() {
                     eprintln!("Executing standardized file: {}", standard_filename);
-                    let result = isolate.execute_file_with_overrides(
-                        &standard_path,
+                    let code = std::fs::read_to_string(&standard_path)?;
+                    let result = isolate.execute_code_string(
+                        "python",
+                        &code,
                         None, // stdin
                         cpu,
                         mem,
                         time.or(wall_time),
                         None, // fd_limit
                     )?;
-                    
+
                     // Print execution results
                     let status_message = match result.status {
                         crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
-                        crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
+                        crate::types::ExecutionStatus::MemoryLimit => {
+                            "Memory Limit Exceeded".to_string()
+                        }
                         _ => format!("{:?}", result.status),
                     };
-                    
+
                     let json_result = serde_json::json!({
                         "status": status_message,
                         "exit_code": result.exit_code,
@@ -252,106 +267,147 @@ fn main() -> Result<()> {
                         "error_message": result.error_message
                     });
                     println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
-                    
+
                     // Automatic cleanup after execution (no command specified path)
                     let cleanup_result = isolate.cleanup();
                     match cleanup_result {
                         Ok(_) => {
                             // Also clean up the standardized files we created
-                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox")
+                                .join(format!("rustbox-{}", box_id));
                             if sandbox_work_dir.exists() {
                                 if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
-                                    eprintln!("Warning: Failed to remove sandbox files {}: {}", sandbox_work_dir.display(), e);
+                                    eprintln!(
+                                        "Warning: Failed to remove sandbox files {}: {}",
+                                        sandbox_work_dir.display(),
+                                        e
+                                    );
                                 } else {
-                                    eprintln!("Automatically cleaned up sandbox {} files and instance", box_id);
+                                    eprintln!(
+                                        "Automatically cleaned up sandbox {} files and instance",
+                                        box_id
+                                    );
                                 }
                             } else {
-                                eprintln!("Automatically cleaned up sandbox {} after execution", box_id);
+                                eprintln!(
+                                    "Automatically cleaned up sandbox {} after execution",
+                                    box_id
+                                );
                             }
-                        },
+                        }
                         Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                     }
-                    
+
                     if !result.success {
                         std::process::exit(1);
                     }
                 } else {
-                    eprintln!("Error: No command specified and standardized file {} not found in sandbox", standard_filename);
+                    eprintln!(
+                        "Error: No command specified and standardized file {} not found in sandbox",
+                        standard_filename
+                    );
                     eprintln!("Usage: rustbox run --box-id {} <filename> or ensure {} exists in sandbox /tmp/", box_id, standard_filename);
                     std::process::exit(1);
                 }
             } else if command.len() == 1 {
                 let command_arg = &command[0];
-                let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let current_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 let source_path = current_dir.join(command_arg);
-                
+
                 // Check if file exists in current directory, copy to standardized location in sandbox
                 if source_path.exists() {
-                    let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
-                    
+                    let sandbox_work_dir =
+                        std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+
                     // Ensure sandbox work directory exists
                     if !sandbox_work_dir.exists() {
-                        std::fs::create_dir_all(&sandbox_work_dir)
-                            .map_err(|e| anyhow::anyhow!("Failed to create sandbox work directory: {}", e))?;
+                        std::fs::create_dir_all(&sandbox_work_dir).map_err(|e| {
+                            anyhow::anyhow!("Failed to create sandbox work directory: {}", e)
+                        })?;
                     }
-                    
+
                     // Determine file extension and create standardized name
-                    let extension = source_path.extension()
+                    let extension = source_path
+                        .extension()
                         .and_then(|ext| ext.to_str())
                         .unwrap_or("py"); // default to .py
                     let standardized_name = format!("{}.{}", box_id, extension);
                     let dest_path = sandbox_work_dir.join(&standardized_name);
-                    
+
                     // Check if standardized file already exists (conflict detection)
                     if dest_path.exists() {
-                        eprintln!("Error: Standardized file {} already exists in sandbox {}", standardized_name, box_id);
+                        eprintln!(
+                            "Error: Standardized file {} already exists in sandbox {}",
+                            standardized_name, box_id
+                        );
                         eprintln!("This indicates another user/process has already initialized this box-id with a file.");
-                        eprintln!("Please use a different box-id or clean up the existing sandbox first.");
+                        eprintln!(
+                            "Please use a different box-id or clean up the existing sandbox first."
+                        );
                         eprintln!("To cleanup: rustbox cleanup --box-id {}", box_id);
                         std::process::exit(1);
                     }
-                    
+
                     // Also create the standard /tmp location inside the sandbox
                     let sandbox_tmp_dir = sandbox_work_dir.join("tmp");
-                    std::fs::create_dir_all(&sandbox_tmp_dir)
-                        .map_err(|e| anyhow::anyhow!("Failed to create sandbox /tmp directory: {}", e))?;
+                    std::fs::create_dir_all(&sandbox_tmp_dir).map_err(|e| {
+                        anyhow::anyhow!("Failed to create sandbox /tmp directory: {}", e)
+                    })?;
                     let internal_dest_path = sandbox_tmp_dir.join(&standardized_name);
-                    
+
                     // Check internal path conflict as well
                     if internal_dest_path.exists() {
                         eprintln!("Error: Internal standardized file /tmp/{} already exists in sandbox {}", standardized_name, box_id);
                         eprintln!("This indicates another user/process has already initialized this box-id with a file.");
-                        eprintln!("Please use a different box-id or clean up the existing sandbox first.");
+                        eprintln!(
+                            "Please use a different box-id or clean up the existing sandbox first."
+                        );
                         eprintln!("To cleanup: rustbox cleanup --box-id {}", box_id);
                         std::process::exit(1);
                     }
-                    
+
                     // Copy file to both locations (work dir and /tmp inside sandbox)
-                    std::fs::copy(&source_path, &dest_path)
-                        .map_err(|e| anyhow::anyhow!("Failed to copy file to sandbox work directory: {}", e))?;
-                    std::fs::copy(&source_path, &internal_dest_path)
-                        .map_err(|e| anyhow::anyhow!("Failed to copy file to sandbox /tmp: {}", e))?;
-                    
+                    std::fs::copy(&source_path, &dest_path).map_err(|e| {
+                        anyhow::anyhow!("Failed to copy file to sandbox work directory: {}", e)
+                    })?;
+                    std::fs::copy(&source_path, &internal_dest_path).map_err(|e| {
+                        anyhow::anyhow!("Failed to copy file to sandbox /tmp: {}", e)
+                    })?;
+
                     eprintln!("Copied {} to sandbox as {}", command_arg, standardized_name);
-                    eprintln!("File available at: /tmp/{} inside sandbox", standardized_name);
-                    
+                    eprintln!(
+                        "File available at: /tmp/{} inside sandbox",
+                        standardized_name
+                    );
+
                     // Execute the copied file using the standardized path
-                    let result = isolate.execute_file_with_overrides(
-                        &dest_path,
+                    let code = std::fs::read_to_string(&dest_path)?;
+                    let language = match extension {
+                        "py" => "python",
+                        "cpp" | "cc" | "cxx" => "cpp",
+                        "java" => "java",
+                        _ => "python", // default
+                    };
+                    let result = isolate.execute_code_string(
+                        language,
+                        &code,
                         None, // stdin
                         cpu,
                         mem,
                         time.or(wall_time),
                         None, // fd_limit
                     )?;
-                    
+
                     // Print execution results in JSON format
                     let status_message = match result.status {
                         crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
-                        crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
+                        crate::types::ExecutionStatus::MemoryLimit => {
+                            "Memory Limit Exceeded".to_string()
+                        }
                         _ => format!("{:?}", result.status),
                     };
-                    
+
                     let json_result = serde_json::json!({
                         "status": status_message,
                         "exit_code": result.exit_code,
@@ -365,47 +421,69 @@ fn main() -> Result<()> {
                         "error_message": result.error_message
                     });
                     println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
-                    
+
                     // Automatic cleanup after execution (file specified path)
                     let cleanup_result = isolate.cleanup();
                     match cleanup_result {
                         Ok(_) => {
                             // Also clean up the standardized files we created
-                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox")
+                                .join(format!("rustbox-{}", box_id));
                             if sandbox_work_dir.exists() {
                                 if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
-                                    eprintln!("Warning: Failed to remove sandbox files {}: {}", sandbox_work_dir.display(), e);
+                                    eprintln!(
+                                        "Warning: Failed to remove sandbox files {}: {}",
+                                        sandbox_work_dir.display(),
+                                        e
+                                    );
                                 } else {
-                                    eprintln!("Automatically cleaned up sandbox {} files and instance", box_id);
+                                    eprintln!(
+                                        "Automatically cleaned up sandbox {} files and instance",
+                                        box_id
+                                    );
                                 }
                             } else {
-                                eprintln!("Automatically cleaned up sandbox {} after execution", box_id);
+                                eprintln!(
+                                    "Automatically cleaned up sandbox {} after execution",
+                                    box_id
+                                );
                             }
-                        },
+                        }
                         Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                     }
-                    
+
                     if !result.success {
                         std::process::exit(1);
                     }
                 } else if std::path::Path::new(command_arg).exists() {
-                    // File exists as absolute path - execute directly  
-                    let result = isolate.execute_file_with_overrides(
-                        std::path::Path::new(command_arg),
+                    // File exists as absolute path - execute directly
+                    let file_path = std::path::Path::new(command_arg);
+                    let code = std::fs::read_to_string(file_path)?;
+                    let language = match file_path.extension().and_then(|ext| ext.to_str()).unwrap_or("py") {
+                        "py" => "python",
+                        "cpp" | "cc" | "cxx" => "cpp", 
+                        "java" => "java",
+                        _ => "python", // default
+                    };
+                    let result = isolate.execute_code_string(
+                        language,
+                        &code,
                         None, // stdin
                         cpu,
                         mem,
                         time.or(wall_time),
                         None, // fd_limit
                     )?;
-                    
+
                     // Print execution results in JSON format
                     let status_message = match result.status {
                         crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
-                        crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
+                        crate::types::ExecutionStatus::MemoryLimit => {
+                            "Memory Limit Exceeded".to_string()
+                        }
                         _ => format!("{:?}", result.status),
                     };
-                    
+
                     let json_result = serde_json::json!({
                         "status": status_message,
                         "exit_code": result.exit_code,
@@ -419,31 +497,45 @@ fn main() -> Result<()> {
                         "error_message": result.error_message
                     });
                     println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
-                    
+
                     // Automatic cleanup after execution (absolute path)
                     let cleanup_result = isolate.cleanup();
                     match cleanup_result {
                         Ok(_) => {
                             // Also clean up the standardized files we created
-                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                            let sandbox_work_dir = std::path::Path::new("/tmp/rustbox")
+                                .join(format!("rustbox-{}", box_id));
                             if sandbox_work_dir.exists() {
                                 if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
-                                    eprintln!("Warning: Failed to remove sandbox files {}: {}", sandbox_work_dir.display(), e);
+                                    eprintln!(
+                                        "Warning: Failed to remove sandbox files {}: {}",
+                                        sandbox_work_dir.display(),
+                                        e
+                                    );
                                 } else {
-                                    eprintln!("Automatically cleaned up sandbox {} files and instance", box_id);
+                                    eprintln!(
+                                        "Automatically cleaned up sandbox {} files and instance",
+                                        box_id
+                                    );
                                 }
                             } else {
-                                eprintln!("Automatically cleaned up sandbox {} after execution", box_id);
+                                eprintln!(
+                                    "Automatically cleaned up sandbox {} after execution",
+                                    box_id
+                                );
                             }
-                        },
+                        }
                         Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                     }
-                    
+
                     if !result.success {
                         std::process::exit(1);
                     }
                 } else {
-                    eprintln!("Error: File '{}' not found in current directory or as absolute path", command_arg);
+                    eprintln!(
+                        "Error: File '{}' not found in current directory or as absolute path",
+                        command_arg
+                    );
                     std::process::exit(1);
                 }
             } else {
@@ -456,14 +548,16 @@ fn main() -> Result<()> {
                     time.or(wall_time),
                     None, // fd_limit
                 )?;
-                
+
                 // Print execution results in JSON format
                 let status_message = match result.status {
                     crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
-                    crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
+                    crate::types::ExecutionStatus::MemoryLimit => {
+                        "Memory Limit Exceeded".to_string()
+                    }
                     _ => format!("{:?}", result.status),
                 };
-                
+
                 let json_result = serde_json::json!({
                     "status": status_message,
                     "exit_code": result.exit_code,
@@ -477,55 +571,68 @@ fn main() -> Result<()> {
                     "error_message": result.error_message
                 });
                 println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
-                
+
                 // Automatic cleanup after execution (multiple arguments path)
                 let cleanup_result = isolate.cleanup();
                 match cleanup_result {
                     Ok(_) => {
                         // Also clean up the standardized files we created (if any)
-                        let sandbox_work_dir = std::path::Path::new("/tmp/rustbox").join(format!("rustbox-{}", box_id));
+                        let sandbox_work_dir = std::path::Path::new("/tmp/rustbox")
+                            .join(format!("rustbox-{}", box_id));
                         if sandbox_work_dir.exists() {
                             if let Err(e) = std::fs::remove_dir_all(&sandbox_work_dir) {
-                                eprintln!("Warning: Failed to remove sandbox files {}: {}", sandbox_work_dir.display(), e);
+                                eprintln!(
+                                    "Warning: Failed to remove sandbox files {}: {}",
+                                    sandbox_work_dir.display(),
+                                    e
+                                );
                             } else {
-                                eprintln!("Automatically cleaned up sandbox {} files and instance", box_id);
+                                eprintln!(
+                                    "Automatically cleaned up sandbox {} files and instance",
+                                    box_id
+                                );
                             }
                         } else {
-                            eprintln!("Automatically cleaned up sandbox {} after execution", box_id);
+                            eprintln!(
+                                "Automatically cleaned up sandbox {} after execution",
+                                box_id
+                            );
                         }
-                    },
+                    }
                     Err(e) => eprintln!("Warning: Failed to cleanup sandbox {}: {}", box_id, e),
                 }
-                
+
                 if !result.success {
                     std::process::exit(1);
                 }
             }
-            
+
             Ok(())
         }
-        Commands::ExecuteCode { 
-            box_id, 
-            language, 
-            code, 
+        Commands::ExecuteCode {
+            box_id,
+            language,
+            code,
             stdin,
-            mem, 
-            time, 
-            cpu, 
-            wall_time, 
+            mem,
+            time,
+            cpu,
+            wall_time,
             processes,
-            strict
+            strict,
+            profile,
+            config,
         } => {
             // Security check for strict mode
             let is_root = unsafe { libc::getuid() } == 0;
-            
+
             if strict && !is_root {
                 eprintln!("❌ SECURITY ERROR: --strict mode requires root privileges");
                 eprintln!("   Strict mode enforces full security isolation for untrusted code");
                 eprintln!("   Run with sudo: sudo rustbox execute-code --strict ...");
                 std::process::exit(1);
             }
-            
+
             if !is_root {
                 eprintln!("🚨 SECURITY WARNING: Running without root privileges!");
                 eprintln!("   ⚠️  Resource limits will NOT be enforced");
@@ -534,46 +641,109 @@ fn main() -> Result<()> {
                 eprintln!("   ⚠️  UNSUITABLE for untrusted code execution");
                 eprintln!();
                 eprintln!("   For secure execution of untrusted code, use:");
-                eprintln!("   sudo rustbox execute-code --strict --box-id={} --language={} --code='...'", box_id, language);
+                eprintln!(
+                    "   sudo rustbox execute-code --strict --box-id={} --language={} --code='...'",
+                    box_id, language
+                );
                 eprintln!();
-                
+
                 // Add extra warning for production usage
                 if !strict {
                     eprintln!("   💡 Use --strict flag to require root privileges and fail fast");
                     eprintln!();
                 }
             }
-            
-            eprintln!("Executing {} code in sandbox {} ({})", 
-                language, 
-                box_id, 
-                if strict { "STRICT MODE" } else if is_root { "ROOT MODE" } else { "DEVELOPMENT MODE" }
+
+            eprintln!(
+                "Executing {} code in sandbox {} ({})",
+                language,
+                box_id,
+                if strict {
+                    "STRICT MODE"
+                } else if is_root {
+                    "ROOT MODE"
+                } else {
+                    "DEVELOPMENT MODE"
+                }
             );
+
+            let mut isolate_config = rustbox::types::IsolateConfig::default();
+            isolate_config.instance_id = format!("rustbox/{}", box_id);
+            isolate_config.strict_mode = strict; // Use user-specified strict mode
+
+            // Load configuration
+            let config_loaded = if let Some(config_path) = &config {
+                // Use user-specified config file
+                match rustbox::types::UnifiedConfig::from_file(config_path) {
+                    Ok(unified_config) => {
+                        eprintln!("📋 Loaded configuration from: {}", config_path);
+                        if let Err(e) = unified_config.to_isolate_config(&language, &mut isolate_config) {
+                            eprintln!("⚠️  Warning: Failed to apply config: {}", e);
+                            false
+                        } else {
+                            eprintln!("✅ Applied configuration for language: {}", language);
+                            true
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️  Warning: Failed to load config from {}: {}", config_path, e);
+                        false
+                    }
+                }
+            } else {
+                // Try to load default unified configuration
+                let default_config_paths = [
+                    "rustbox/config.json",
+                    "./rustbox/config.json",
+                    "/etc/rustbox/config.json",
+                    "config.json",
+                ];
+                
+                let mut loaded = false;
+                for path in &default_config_paths {
+                    if std::path::Path::new(path).exists() {
+                        match rustbox::types::UnifiedConfig::from_file(path) {
+                            Ok(unified_config) => {
+                                eprintln!("📋 Loaded default configuration from: {}", path);
+                                if let Err(e) = unified_config.to_isolate_config(&language, &mut isolate_config) {
+                                    eprintln!("⚠️  Warning: Failed to apply config: {}", e);
+                                } else {
+                                    eprintln!("✅ Applied configuration for language: {}", language);
+                                    loaded = true;
+                                }
+                                break;
+                            }
+                            Err(_) => continue,
+                        }
+                    }
+                }
+                loaded
+            };
             
-            let mut config = rustbox::types::IsolateConfig::default();
-            config.instance_id = format!("rustbox/{}", box_id);
-            config.strict_mode = strict;        // Use user-specified strict mode
-            
-            // Apply resource limits if specified
-            if let Some(mem) = mem {
-                config.memory_limit = Some(mem * 1024 * 1024); // Convert MB to bytes
-                eprintln!("Memory limit: {} MB", mem);
-            }
-            if let Some(cpu_limit) = cpu.or(time) {
-                config.cpu_time_limit = Some(std::time::Duration::from_secs(cpu_limit));
-                eprintln!("CPU time limit: {} seconds", cpu_limit);
-            }
-            if let Some(wall_limit) = wall_time {
-                config.wall_time_limit = Some(std::time::Duration::from_secs(wall_limit));
-                eprintln!("Wall time limit: {} seconds", wall_limit);
-            }
-            if let Some(proc_limit) = processes {
-                config.process_limit = Some(proc_limit);
-                eprintln!("Process limit: {}", proc_limit);
+            if !config_loaded {
+                eprintln!("⚠️  No configuration loaded, using built-in defaults");
             }
 
-            let mut isolate = rustbox::isolate::Isolate::new(config)?;
-            
+            // Apply command line overrides (these take precedence over config file)
+            if let Some(mem) = mem {
+                isolate_config.memory_limit = Some(mem * 1024 * 1024); // Convert MB to bytes
+                eprintln!("🔧 Override - Memory limit: {} MB", mem);
+            }
+            if let Some(cpu_limit) = cpu.or(time) {
+                isolate_config.cpu_time_limit = Some(std::time::Duration::from_secs(cpu_limit));
+                eprintln!("🔧 Override - CPU time limit: {} seconds", cpu_limit);
+            }
+            if let Some(wall_limit) = wall_time {
+                isolate_config.wall_time_limit = Some(std::time::Duration::from_secs(wall_limit));
+                eprintln!("🔧 Override - Wall time limit: {} seconds", wall_limit);
+            }
+            if let Some(proc_limit) = processes {
+                isolate_config.process_limit = Some(proc_limit);
+                eprintln!("🔧 Override - Process limit: {}", proc_limit);
+            }
+
+            let mut isolate = rustbox::isolate::Isolate::new(isolate_config)?;
+
             // Execute code string directly
             let result = isolate.execute_code_string(
                 &language,
@@ -584,14 +754,14 @@ fn main() -> Result<()> {
                 time.or(wall_time),
                 None, // fd_limit
             )?;
-            
+
             // Print execution results in JSON format
             let status_message = match result.status {
                 crate::types::ExecutionStatus::TimeLimit => "TLE".to_string(),
                 crate::types::ExecutionStatus::MemoryLimit => "Memory Limit Exceeded".to_string(),
                 _ => format!("{:?}", result.status),
             };
-            
+
             let json_result = serde_json::json!({
                 "status": status_message,
                 "exit_code": result.exit_code,
@@ -606,16 +776,16 @@ fn main() -> Result<()> {
                 "language": language
             });
             println!("{}", serde_json::to_string_pretty(&json_result).unwrap());
-            
+
             if !result.success {
                 std::process::exit(1);
             }
-            
+
             Ok(())
         }
         Commands::Cleanup { box_id } => {
             eprintln!("Cleaning up sandbox with box-id: {}", box_id);
-            
+
             let instance_id = format!("rustbox/{}", box_id);
             if let Some(isolate) = rustbox::isolate::Isolate::load(&instance_id)? {
                 isolate.cleanup()?;
@@ -625,14 +795,12 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Commands::CheckDeps { verbose } => {
-            check_language_dependencies(verbose)
-        }
+        Commands::CheckDeps { verbose } => check_language_dependencies(verbose),
     }
 }
 
 /// Perform comprehensive security subsystem checks
-/// 
+///
 /// This function validates that all necessary security mechanisms are available
 /// and properly configured on the host system.
 fn perform_security_checks() {
@@ -644,7 +812,6 @@ fn perform_security_checks() {
     } else {
         eprintln!("✅ cgroups v1 available - resource limits enabled");
     }
-
 
     // Check namespace support for process isolation
     if crate::namespace::NamespaceIsolation::is_supported() {
@@ -664,15 +831,14 @@ fn perform_security_checks() {
 }
 
 /// Validate that critical system directories are properly configured
-/// 
+///
 /// # Security Considerations
 /// - Ensures /tmp is writable for sandbox operations
 /// - Validates /proc and /sys are mounted for system information
 /// - Checks that sensitive directories are protected
 fn validate_system_directories() {
     // Check /tmp accessibility for sandbox operations
-    if !std::path::Path::new("/tmp").exists() || 
-       !std::path::Path::new("/tmp").is_dir() {
+    if !std::path::Path::new("/tmp").exists() || !std::path::Path::new("/tmp").is_dir() {
         eprintln!("⚠️  Warning: /tmp directory not accessible");
         eprintln!("   Sandbox operations may fail without writable temporary space");
     }
@@ -701,27 +867,24 @@ fn validate_system_directories() {
 /// Check if all required language dependencies are installed
 fn check_language_dependencies(verbose: bool) -> Result<()> {
     use std::process::Command;
-    
+
     println!("🔍 Checking language dependencies...");
     println!();
-    
+
     let mut all_ok = true;
     let mut missing_languages = Vec::new();
-    
+
     // Define languages and their required commands
     let languages = [
         ("Python", vec![("python3", "--version")]),
-        ("C/C++", vec![("gcc", "--version"), ("g++", "--version")]),
+        ("C++", vec![("gcc", "--version"), ("g++", "--version")]),
         ("Java", vec![("java", "-version"), ("javac", "-version")]),
-        ("JavaScript", vec![("node", "--version")]),
-        ("Rust", vec![("rustc", "--version")]),
-        ("Go", vec![("go", "version")]),
     ];
-    
+
     for (lang_name, commands) in &languages {
         let mut lang_ok = true;
         let mut versions = Vec::new();
-        
+
         for (cmd, version_arg) in commands {
             match Command::new(cmd).arg(version_arg).output() {
                 Ok(output) => {
@@ -730,8 +893,12 @@ fn check_language_dependencies(verbose: bool) -> Result<()> {
                             String::from_utf8_lossy(&output.stdout)
                         } else {
                             String::from_utf8_lossy(&output.stderr)
-                        }.lines().next().unwrap_or("").to_string();
-                        
+                        }
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+
                         if verbose {
                             versions.push(format!("  {} -> {}", cmd, version_info.trim()));
                         }
@@ -750,7 +917,7 @@ fn check_language_dependencies(verbose: bool) -> Result<()> {
                 }
             }
         }
-        
+
         if lang_ok {
             println!("✅ {} - OK", lang_name);
             if verbose {
@@ -768,47 +935,46 @@ fn check_language_dependencies(verbose: bool) -> Result<()> {
             missing_languages.push(*lang_name);
             all_ok = false;
         }
-        
+
         if verbose {
             println!();
         }
     }
-    
+
     println!();
-    
+
     if all_ok {
         println!("🎉 All language dependencies are installed!");
         println!("✅ RustBox is ready to use");
-        
+
         if verbose {
             println!();
             println!("💡 Usage examples:");
             println!("  rustbox execute-code --strict --box-id=1 --language=python --code='print(\"Hello World\")'");
             println!("  rustbox execute-code --strict --box-id=2 --language=cpp --processes=10 --code='#include<iostream>...'");
-            println!("  rustbox execute-code --strict --box-id=3 --language=go --code='package main; import \"fmt\"; func main() {{ fmt.Println(\"Hello\") }}'");
         }
-        
+
         Ok(())
     } else {
-        println!("❌ Missing language dependencies: {}", missing_languages.join(", "));
+        println!(
+            "❌ Missing language dependencies: {}",
+            missing_languages.join(", ")
+        );
         println!();
         println!("🔧 To install missing languages, run:");
         println!("   ./setup_languages.sh");
         println!();
         println!("Or install manually:");
-        
+
         for lang in &missing_languages {
             match *lang {
                 "Python" => println!("  • Python: sudo apt install python3 python3-pip"),
-                "C/C++" => println!("  • C/C++: sudo apt install build-essential gcc g++"),
+                "C++" => println!("  • C++: sudo apt install build-essential gcc g++"),
                 "Java" => println!("  • Java: sudo apt install openjdk-17-jdk"),
-                "JavaScript" => println!("  • Node.js: curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash - && sudo apt install nodejs"),
-                "Rust" => println!("  • Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"),
-                "Go" => println!("  • Go: sudo apt install golang-go"),
                 _ => {}
             }
         }
-        
+
         std::process::exit(1);
     }
 }
