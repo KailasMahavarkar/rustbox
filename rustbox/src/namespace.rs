@@ -100,7 +100,10 @@ impl NamespaceIsolation {
                     }
                 }
 
-                log::info!("Successfully applied namespace isolation: {:?}", self.get_enabled_namespaces());
+                log::info!(
+                    "Successfully applied namespace isolation: {:?}",
+                    self.get_enabled_namespaces()
+                );
             }
 
             Ok(())
@@ -117,12 +120,11 @@ impl NamespaceIsolation {
         }
     }
 
-
     /// Check if any isolation is enabled
     pub fn is_isolation_enabled(&self) -> bool {
-        self.enable_pid_namespace 
-            || self.enable_mount_namespace 
-            || self.enable_network_namespace 
+        self.enable_pid_namespace
+            || self.enable_mount_namespace
+            || self.enable_network_namespace
             || self.enable_user_namespace
             || self.enable_ipc_namespace
             || self.enable_uts_namespace
@@ -131,7 +133,7 @@ impl NamespaceIsolation {
     /// Get enabled namespaces as a string
     pub fn get_enabled_namespaces(&self) -> Vec<String> {
         let mut namespaces = Vec::new();
-        
+
         if self.enable_pid_namespace {
             namespaces.push("PID".to_string());
         }
@@ -150,11 +152,10 @@ impl NamespaceIsolation {
         if self.enable_uts_namespace {
             namespaces.push("UTS".to_string());
         }
-        
+
         namespaces
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -164,7 +165,10 @@ mod tests {
     fn test_namespace_creation() {
         let ns = NamespaceIsolation::new_default();
         assert!(ns.is_isolation_enabled());
-        assert_eq!(ns.get_enabled_namespaces(), vec!["PID", "Mount", "Network", "IPC", "UTS"]);
+        assert_eq!(
+            ns.get_enabled_namespaces(),
+            vec!["PID", "Mount", "Network", "IPC", "UTS"]
+        );
     }
 
     #[test]
@@ -173,5 +177,4 @@ mod tests {
         let supported = NamespaceIsolation::is_supported();
         println!("Namespace support: {}", supported);
     }
-
 }

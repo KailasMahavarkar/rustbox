@@ -268,8 +268,8 @@ if sudo "$MINI_ISOLATE" init --box-id 500 >/dev/null 2>&1; then
     # Check if lock files are created in expected format
     lock_files_found=0
     
-    # Look for lock files in common locations
-    for lock_dir in "/tmp/rustbox-locks" "/tmp/rustbox/locks" "/var/lock/rustbox"; do
+    # Look for lock files in common locations (including new lock manager location)
+    for lock_dir in "/var/run/rustbox/locks" "/tmp/rustbox/locks" "/tmp/rustbox-locks" "/var/lock/rustbox"; do
         if [[ -d "$lock_dir" ]]; then
             lock_files=$(find "$lock_dir" -name "*500*" 2>/dev/null | wc -l)
             if [[ $lock_files -gt 0 ]]; then

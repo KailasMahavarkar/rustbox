@@ -5,6 +5,6 @@ pub mod cgroup;
 pub mod executor;
 pub mod filesystem;
 pub mod isolate;
+pub mod lock_manager;
 pub mod namespace;
 pub mod types;
-pub mod lock_manager;

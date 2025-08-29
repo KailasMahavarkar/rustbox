@@ -33,13 +33,16 @@ impl FilesystemSecurity {
             self.setup_chroot_jail(chroot_path)?;
             self.setup_hardened_mounts(chroot_path)?;
         }
-        
+
         self.setup_workdir()?;
         Ok(())
     }
 
     /// Setup directory bindings for the sandbox
-    pub fn setup_directory_bindings(&self, bindings: &[crate::types::DirectoryBinding]) -> Result<()> {
+    pub fn setup_directory_bindings(
+        &self,
+        bindings: &[crate::types::DirectoryBinding],
+    ) -> Result<()> {
         for binding in bindings {
             self.setup_single_binding(binding)?;
         }
@@ -53,7 +56,10 @@ impl FilesystemSecurity {
 
         // Skip if source doesn't exist and maybe flag is set
         if binding.maybe && !binding.source.exists() {
-            log::debug!("Skipping non-existent directory binding: {}", binding.source.display());
+            log::debug!(
+                "Skipping non-existent directory binding: {}",
+                binding.source.display()
+            );
             return Ok(());
         }
 
@@ -64,7 +70,8 @@ impl FilesystemSecurity {
             // If no chroot, use working directory as base for relative paths
             if binding.target.is_absolute() {
                 // For absolute paths, create under working directory to avoid permission issues
-                self.workdir.join(binding.target.strip_prefix("/").unwrap_or(&binding.target))
+                self.workdir
+                    .join(binding.target.strip_prefix("/").unwrap_or(&binding.target))
             } else {
                 self.workdir.join(&binding.target)
             }
@@ -93,7 +100,7 @@ impl FilesystemSecurity {
 
         // Prepare mount flags based on permissions
         let mut mount_flags = libc::MS_BIND;
-        
+
         match binding.permissions {
             DirectoryPermissions::ReadOnly => {
                 mount_flags |= libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV;
@@ -138,7 +145,7 @@ impl FilesystemSecurity {
                     target_path.display(),
                     errno
                 );
-                
+
                 // Fallback: copy files for non-root users
                 self.copy_directory_contents(&binding.source, &target_path)?;
                 log::info!(
@@ -169,7 +176,7 @@ impl FilesystemSecurity {
     /// Copy directory contents as fallback when bind mounting fails
     fn copy_directory_contents(&self, source: &Path, target: &Path) -> Result<()> {
         use std::fs;
-        
+
         if !source.exists() {
             return Err(IsolateError::Config(format!(
                 "Source directory does not exist: {}",
@@ -236,14 +243,7 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn create_chroot_structure(&self, chroot_path: &Path) -> Result<()> {
         let essential_dirs = [
-            "tmp",
-            "dev",
-            "proc", 
-            "usr/bin",
-            "bin",
-            "lib",
-            "lib64",
-            "etc",
+            "tmp", "dev", "proc", "usr/bin", "bin", "lib", "lib64", "etc",
         ];
 
         for dir in &essential_dirs {
@@ -271,7 +271,7 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn create_essential_devices(&self, chroot_path: &Path) -> Result<()> {
         let dev_dir = chroot_path.join("dev");
-        
+
         // Create /dev/null
         let null_path = dev_dir.join("null");
         if !null_path.exists() {
@@ -279,7 +279,7 @@ impl FilesystemSecurity {
             let result = unsafe {
                 let path_cstr = std::ffi::CString::new(null_path.to_string_lossy().as_bytes())
                     .map_err(|e| IsolateError::Config(format!("Invalid path: {}", e)))?;
-                
+
                 libc::mknod(
                     path_cstr.as_ptr(),
                     libc::S_IFCHR | 0o666,
@@ -301,7 +301,7 @@ impl FilesystemSecurity {
             let result = unsafe {
                 let path_cstr = std::ffi::CString::new(zero_path.to_string_lossy().as_bytes())
                     .map_err(|e| IsolateError::Config(format!("Invalid path: {}", e)))?;
-                
+
                 libc::mknod(
                     path_cstr.as_ptr(),
                     libc::S_IFCHR | 0o666,
@@ -325,12 +325,12 @@ impl FilesystemSecurity {
     fn apply_mount_security_flags(&self, chroot_path: &Path) -> Result<()> {
         // Apply noexec, nosuid, nodev flags to the chroot mount
         let mount_flags = libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_BIND;
-        
+
         let source_cstr = std::ffi::CString::new(chroot_path.to_string_lossy().as_bytes())
             .map_err(|e| IsolateError::Config(format!("Invalid chroot path: {}", e)))?;
-        
+
         let target_cstr = source_cstr.clone();
-        
+
         let result = unsafe {
             libc::mount(
                 source_cstr.as_ptr(),
@@ -386,14 +386,14 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn mount_hardened_sysfs(&self, sys_path: &Path) -> Result<()> {
         let mount_flags = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
-        
+
         let source_cstr = std::ffi::CString::new("sysfs")
             .map_err(|e| IsolateError::Config(format!("Invalid source string: {}", e)))?;
         let target_cstr = std::ffi::CString::new(sys_path.to_string_lossy().as_bytes())
             .map_err(|e| IsolateError::Config(format!("Invalid sys path: {}", e)))?;
         let fstype_cstr = std::ffi::CString::new("sysfs")
             .map_err(|e| IsolateError::Config(format!("Invalid fstype string: {}", e)))?;
-        
+
         let result = unsafe {
             libc::mount(
                 source_cstr.as_ptr(),
@@ -426,7 +426,7 @@ impl FilesystemSecurity {
     fn mount_hardened_devfs(&self, dev_path: &Path) -> Result<()> {
         // First mount tmpfs on dev directory
         let mount_flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NOATIME;
-        
+
         let source_cstr = std::ffi::CString::new("tmpfs")
             .map_err(|e| IsolateError::Config(format!("Invalid source string: {}", e)))?;
         let target_cstr = std::ffi::CString::new(dev_path.to_string_lossy().as_bytes())
@@ -435,7 +435,7 @@ impl FilesystemSecurity {
             .map_err(|e| IsolateError::Config(format!("Invalid fstype string: {}", e)))?;
         let options_cstr = std::ffi::CString::new("size=64k,mode=755")
             .map_err(|e| IsolateError::Config(format!("Invalid options string: {}", e)))?;
-        
+
         let result = unsafe {
             libc::mount(
                 source_cstr.as_ptr(),
@@ -471,14 +471,14 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn mount_hardened_procfs(&self, proc_path: &Path) -> Result<()> {
         let mount_flags = libc::MS_NOSUID | libc::MS_NOEXEC | libc::MS_NODEV;
-        
+
         let source_cstr = std::ffi::CString::new("proc")
             .map_err(|e| IsolateError::Config(format!("Invalid source string: {}", e)))?;
         let target_cstr = std::ffi::CString::new(proc_path.to_string_lossy().as_bytes())
             .map_err(|e| IsolateError::Config(format!("Invalid proc path: {}", e)))?;
         let fstype_cstr = std::ffi::CString::new("proc")
             .map_err(|e| IsolateError::Config(format!("Invalid fstype string: {}", e)))?;
-        
+
         let result = unsafe {
             libc::mount(
                 source_cstr.as_ptr(),
@@ -510,17 +510,17 @@ impl FilesystemSecurity {
     #[cfg(unix)]
     fn create_minimal_devices(&self, dev_path: &Path) -> Result<()> {
         let devices = [
-            ("null", libc::S_IFCHR, 1, 3),      // /dev/null
-            ("zero", libc::S_IFCHR, 1, 5),      // /dev/zero
-            ("random", libc::S_IFCHR, 1, 8),    // /dev/random
-            ("urandom", libc::S_IFCHR, 1, 9),   // /dev/urandom
+            ("null", libc::S_IFCHR, 1, 3),    // /dev/null
+            ("zero", libc::S_IFCHR, 1, 5),    // /dev/zero
+            ("random", libc::S_IFCHR, 1, 8),  // /dev/random
+            ("urandom", libc::S_IFCHR, 1, 9), // /dev/urandom
         ];
 
         for (name, mode, major, minor) in &devices {
             let device_path = dev_path.join(name);
             let path_cstr = std::ffi::CString::new(device_path.to_string_lossy().as_bytes())
                 .map_err(|e| IsolateError::Config(format!("Invalid device path: {}", e)))?;
-            
+
             let result = unsafe {
                 libc::mknod(
                     path_cstr.as_ptr(),
@@ -549,7 +549,7 @@ impl FilesystemSecurity {
                 .map_err(|e| IsolateError::Config(format!("Invalid chroot path: {}", e)))?;
 
             let result = unsafe { libc::chroot(path_cstr.as_ptr()) };
-            
+
             if result != 0 {
                 let errno = unsafe { *libc::__errno_location() };
                 return Err(IsolateError::Config(format!(
@@ -581,20 +581,15 @@ impl FilesystemSecurity {
         // Determine the actual working directory path
         let actual_workdir = if self.chroot_dir.is_some() {
             // If using chroot, workdir is relative to chroot root
-            PathBuf::from("/").join(
-                self.workdir
-                    .strip_prefix("/")
-                    .unwrap_or(&self.workdir)
-            )
+            PathBuf::from("/").join(self.workdir.strip_prefix("/").unwrap_or(&self.workdir))
         } else {
             self.workdir.clone()
         };
 
         // Create workdir if it doesn't exist
         if !actual_workdir.exists() {
-            fs::create_dir_all(&actual_workdir).map_err(|e| {
-                IsolateError::Config(format!("Failed to create workdir: {}", e))
-            })?;
+            fs::create_dir_all(&actual_workdir)
+                .map_err(|e| IsolateError::Config(format!("Failed to create workdir: {}", e)))?;
         }
 
         // Set secure permissions
@@ -611,9 +606,9 @@ impl FilesystemSecurity {
 
     /// Validate that a path is within the allowed boundaries
     pub fn validate_path(&self, path: &Path) -> Result<()> {
-        let canonical_path = path.canonicalize().map_err(|e| {
-            IsolateError::Config(format!("Failed to canonicalize path: {}", e))
-        })?;
+        let canonical_path = path
+            .canonicalize()
+            .map_err(|e| IsolateError::Config(format!("Failed to canonicalize path: {}", e)))?;
 
         // If using chroot, all paths should be within chroot
         if let Some(ref chroot_path) = self.chroot_dir {
@@ -633,7 +628,7 @@ impl FilesystemSecurity {
         // Additional validation: prevent access to sensitive system directories
         let dangerous_paths = [
             "/etc/passwd",
-            "/etc/shadow", 
+            "/etc/shadow",
             "/etc/sudoers",
             "/root",
             "/boot",
@@ -680,11 +675,7 @@ impl FilesystemSecurity {
     pub fn get_effective_workdir(&self) -> PathBuf {
         if self.chroot_dir.is_some() {
             // Within chroot, paths are relative to chroot root
-            PathBuf::from("/").join(
-                self.workdir
-                    .strip_prefix("/")
-                    .unwrap_or(&self.workdir)
-            )
+            PathBuf::from("/").join(self.workdir.strip_prefix("/").unwrap_or(&self.workdir))
         } else {
             self.workdir.clone()
         }
@@ -700,7 +691,7 @@ mod tests {
     fn test_filesystem_security_creation() {
         let temp_dir = env::temp_dir().join("rustbox-test");
         let fs_security = FilesystemSecurity::new(None, temp_dir.clone(), false);
-        
+
         assert!(!fs_security.is_isolated());
         assert_eq!(fs_security.get_effective_workdir(), temp_dir);
     }
@@ -710,7 +701,7 @@ mod tests {
         let temp_dir = env::temp_dir().join("rustbox-chroot-test");
         let work_dir = temp_dir.join("work");
         let fs_security = FilesystemSecurity::new(Some(temp_dir), work_dir, false);
-        
+
         assert!(fs_security.is_isolated());
     }
 
@@ -718,11 +709,11 @@ mod tests {
     fn test_path_validation() {
         let temp_dir = env::temp_dir().join("rustbox-validation-test");
         let fs_security = FilesystemSecurity::new(None, temp_dir.clone(), false);
-        
+
         // Test dangerous path rejection
         let result = fs_security.validate_path(Path::new("/etc/passwd"));
         assert!(result.is_err());
-        
+
         let result = fs_security.validate_path(Path::new("/etc/shadow"));
         assert!(result.is_err());
     }
@@ -731,19 +722,20 @@ mod tests {
     #[test]
     fn test_chroot_structure_creation() {
         use std::fs;
-        
+
         let temp_dir = env::temp_dir().join("rustbox-chroot-structure-test");
         let _ = fs::remove_dir_all(&temp_dir); // Clean up any previous test
-        
-        let fs_security = FilesystemSecurity::new(Some(temp_dir.clone()), temp_dir.join("work"), false);
-        
+
+        let fs_security =
+            FilesystemSecurity::new(Some(temp_dir.clone()), temp_dir.join("work"), false);
+
         // This test requires root privileges to actually create device files
         // So we just test the directory structure creation part
         if let Err(e) = fs_security.setup_isolation() {
             // Expected to fail without root privileges for device creation
             assert!(e.to_string().contains("create") || e.to_string().contains("permission"));
         }
-        
+
         // Clean up
         let _ = fs::remove_dir_all(&temp_dir);
     }

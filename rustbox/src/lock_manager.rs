@@ -1,557 +1,806 @@
-/// Enhanced multi-user lock management for rustbox
-/// Based on isolate-reference lock file format for compatibility
-
-use crate::types::{IsolateError, Result};
+/// Enhanced lock manager implementing hybrid file + process-based locking with heartbeat
+/// Based on the senior SDE design principles from new_lock.md
+use crate::types::{HealthStatus, LockError, LockInfo, LockManagerHealth, LockMetrics, LockResult};
+use crossbeam_channel::{self, Sender};
+use log::{error, info, warn};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Lock record structure compatible with isolate-reference
-#[derive(Debug, Clone)]
-pub struct LockRecord {
-    /// Magic number for file format validation (0x48736f6c = "Hsol")
-    pub magic: u32,
-    /// UID of the box owner  
-    pub owner_uid: u32,
-    /// Whether cgroups are enabled
-    pub cg_enabled: bool,
-    /// Whether the box is properly initialized
-    pub is_initialized: bool,
-    /// PID of the process holding the lock (for orphan detection)
-    pub holder_pid: u32,
-    /// Timestamp when lock was acquired (for timeout detection)
-    pub timestamp: u64,
-}
+/// Global lock manager instance
+static GLOBAL_LOCK_MANAGER: OnceLock<Arc<Mutex<RustboxLockManager>>> = OnceLock::new();
 
-/// Default lock directory (can be configured)
-const DEFAULT_LOCK_ROOT: &str = "/tmp/rustbox-locks";
-
-/// Magic number for lock files (same as isolate-reference)
-const LOCK_MAGIC: u32 = 0x48736f6c;
-
-/// File lock operations
-const LOCK_EX: i32 = 2;   // Exclusive lock
-const LOCK_NB: i32 = 4;   // Non-blocking
+/// flock operation constants
+const LOCK_EX: i32 = 2; // Exclusive lock
+const LOCK_NB: i32 = 4; // Non-blocking
 
 extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
 }
 
-/// Enhanced lock manager for box ID-based multi-user safety
-pub struct BoxLockManager {
-    lock_root: PathBuf,
-    box_id: u32,
-    lock_file: Option<File>,
-    lock_record: Option<LockRecord>,
+/// The main lock manager implementing "Living Locks" with heartbeat
+pub struct RustboxLockManager {
+    lock_dir: PathBuf,
+    heartbeat_interval: Duration,
+    stale_timeout: Duration,
+    cleanup_thread: Option<JoinHandle<()>>,
+    cleanup_shutdown: Option<Sender<()>>,
+    metrics: Arc<Mutex<LockManagerMetrics>>,
 }
 
-impl BoxLockManager {
-    /// Create new lock manager for a specific box ID
-    pub fn new(box_id: u32) -> Self {
-        Self {
-            lock_root: PathBuf::from(DEFAULT_LOCK_ROOT),
-            box_id,
-            lock_file: None,
-            lock_record: None,
-        }
+/// Internal metrics tracking
+#[derive(Debug, Default)]
+struct LockManagerMetrics {
+    total_acquisitions: AtomicU64,
+    total_contentions: AtomicU64,
+    total_cleanups: AtomicU64,
+    acquisition_times: Vec<Duration>,
+    errors_by_type: HashMap<String, u64>,
+    stale_locks_cleaned: AtomicU64,
+}
+
+/// Individual box lock with heartbeat thread
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct BoxLock {
+    box_id: u32,
+    lock_file: File,
+    lock_path: PathBuf,
+    owner_pid: u32,
+    created_at: SystemTime,
+    heartbeat_file: File,
+    heartbeat_handle: JoinHandle<()>,
+    heartbeat_shutdown: Sender<()>,
+}
+
+/// RAII guard for box locks
+#[derive(Debug)]
+pub struct BoxLockGuard {
+    lock: Option<Arc<Mutex<BoxLock>>>,
+    _cleanup: DropGuard,
+}
+
+/// Drop guard for cleanup
+#[derive(Debug)]
+struct DropGuard {
+    box_id: u32,
+    lock_dir: PathBuf,
+}
+
+impl RustboxLockManager {
+    /// Create new lock manager with enhanced safety
+    pub fn new() -> LockResult<Self> {
+        let lock_dir = PathBuf::from("/var/run/rustbox/locks");
+
+        // Fail fast if we can't create lock directory
+        std::fs::create_dir_all(&lock_dir).map_err(|e| LockError::PermissionDenied {
+            details: format!("Cannot create lock directory {}: {}", lock_dir.display(), e),
+        })?;
+
+        // Test write permissions immediately
+        let test_file = lock_dir.join(".write_test");
+        std::fs::write(&test_file, b"test").map_err(|e| LockError::PermissionDenied {
+            details: format!("Lock directory not writable: {}", e),
+        })?;
+        std::fs::remove_file(&test_file)?;
+
+        let manager = Self {
+            lock_dir,
+            heartbeat_interval: Duration::from_secs(1),
+            stale_timeout: Duration::from_secs(10),
+            cleanup_thread: None,
+            cleanup_shutdown: None,
+            metrics: Arc::new(Mutex::new(LockManagerMetrics::default())),
+        };
+
+        info!(
+            "Initialized RustboxLockManager at {}",
+            manager.lock_dir.display()
+        );
+        Ok(manager)
     }
 
-    /// Create new lock manager with custom lock directory
-    pub fn with_lock_root<P: Into<PathBuf>>(box_id: u32, lock_root: P) -> Self {
-        Self {
-            lock_root: lock_root.into(),
-            box_id,
-            lock_file: None,
-            lock_record: None,
-        }
-    }
+    /// Start background cleanup thread
+    pub fn start_cleanup_thread(&mut self) -> LockResult<()> {
+        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
+        let lock_dir = self.lock_dir.clone();
+        let stale_timeout = self.stale_timeout;
+        let metrics = Arc::clone(&self.metrics);
 
-    /// Acquire exclusive lock for box (init=true for initialization)
-    pub fn acquire_lock(&mut self, is_init: bool) -> Result<()> {
-        // Create lock directory if it doesn't exist
-        if !self.lock_root.exists() {
-            std::fs::create_dir_all(&self.lock_root)?;
-        }
+        let cleanup_thread = thread::spawn(move || {
+            info!("Started lock cleanup thread");
+            let mut cleanup_interval = Duration::from_secs(30);
 
-        let lock_path = self.lock_root.join(self.box_id.to_string());
-        
-        // First attempt: Clean up any potentially orphaned locks
-        self.cleanup_orphaned_locks()?;
-
-        // Open lock file (create only for init operations)
-        let mut lock_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(is_init)
-            .open(&lock_path)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    IsolateError::Lock(format!("Box {} not initialized", self.box_id))
-                } else {
-                    IsolateError::Io(e)
+            loop {
+                // Check for shutdown signal
+                if shutdown_rx.try_recv().is_ok() {
+                    info!("Lock cleanup thread shutting down");
+                    break;
                 }
-            })?;
 
-        // Acquire exclusive lock (non-blocking to detect busy state)
-        #[cfg(unix)]
+                // Perform cleanup
+                if let Err(e) = Self::cleanup_stale_locks_worker(&lock_dir, stale_timeout, &metrics)
+                {
+                    warn!("Cleanup failed: {}", e);
+                }
+
+                // Wait for next cleanup cycle or shutdown
+                if shutdown_rx.recv_timeout(cleanup_interval).is_ok() {
+                    break;
+                }
+
+                // Adaptive cleanup interval based on activity
+                cleanup_interval = std::cmp::min(
+                    Duration::from_secs(300), // Max 5 minutes
+                    cleanup_interval + Duration::from_secs(10),
+                );
+            }
+        });
+
+        self.cleanup_thread = Some(cleanup_thread);
+        self.cleanup_shutdown = Some(shutdown_tx);
+        Ok(())
+    }
+
+    /// Core lock acquisition with retry logic and exponential backoff
+    pub fn acquire_lock(&self, box_id: u32, timeout: Duration) -> LockResult<BoxLockGuard> {
+        let start_time = Instant::now();
+        let lock_path = self.lock_dir.join(format!("box-{}.lock", box_id));
+        let heartbeat_path = self.lock_dir.join(format!("box-{}.heartbeat", box_id));
+
+        info!("Attempting to acquire lock for box {}", box_id);
+
+        // Step 1: Clean any stale lock first
+        if let Err(e) = self.cleanup_stale_lock_if_needed(box_id) {
+            warn!("Failed to cleanup stale lock for box {}: {}", box_id, e);
+        }
+
+        // Step 2: Retry loop with exponential backoff
+        let mut retry_delay = Duration::from_millis(10);
+        loop {
+            match self.try_acquire_immediate(box_id, &lock_path, &heartbeat_path) {
+                Ok(lock_guard) => {
+                    let elapsed = start_time.elapsed();
+                    info!("Acquired lock for box {} in {:?}", box_id, elapsed);
+
+                    // Update metrics
+                    self.record_acquisition(elapsed);
+                    return Ok(lock_guard);
+                }
+                Err(LockError::Busy { .. }) => {
+                    if start_time.elapsed() >= timeout {
+                        self.record_timeout();
+                        return Err(LockError::Timeout {
+                            box_id,
+                            waited: start_time.elapsed(),
+                            current_owner: self.get_lock_owner(box_id),
+                        });
+                    }
+
+                    // Exponential backoff with jitter
+                    let jitter =
+                        Duration::from_millis(fastrand::u64(0..=retry_delay.as_millis() as u64));
+                    thread::sleep(retry_delay + jitter);
+                    retry_delay = std::cmp::min(retry_delay * 2, Duration::from_millis(500));
+
+                    self.record_contention();
+                }
+                Err(e) => {
+                    self.record_error(&e);
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    /// Atomic lock acquisition attempt
+    fn try_acquire_immediate(
+        &self,
+        box_id: u32,
+        lock_path: &Path,
+        heartbeat_path: &Path,
+    ) -> LockResult<BoxLockGuard> {
+        // Step 1: Create lock file with exclusive access
+        let lock_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true) // Clear any existing content
+            .open(lock_path)?;
+
+        // Step 2: Try to acquire exclusive lock (non-blocking)
         let flock_result = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB) };
-        #[cfg(not(unix))]
-        let flock_result = 0; // Always succeed on non-Unix systems
-        
         if flock_result != 0 {
             let errno = std::io::Error::last_os_error();
             return match errno.raw_os_error() {
-                Some(libc::EWOULDBLOCK) | Some(libc::EAGAIN) => {
-                    Err(IsolateError::Lock(format!(
-                        "Box {} is currently in use by another process", 
-                        self.box_id
-                    )))
-                },
-                _ => Err(IsolateError::Lock(format!(
-                    "Cannot acquire lock for box {}: {}",
-                    self.box_id, errno
-                ))),
+                Some(libc::EWOULDBLOCK) => Err(LockError::Busy {
+                    box_id,
+                    owner_pid: None,
+                }),
+                _ => Err(LockError::SystemError {
+                    message: format!("flock failed: {}", errno),
+                }),
             };
         }
 
-        // Read and validate lock record
-        let mut buffer = [0u8; std::mem::size_of::<LockRecord>()];
-        let bytes_read = lock_file.read(&mut buffer)?;
-
-        let lock_record = if bytes_read == buffer.len() {
-            // Parse existing lock record
-            let magic = u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]);
-            let owner_uid = u32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
-            let cg_enabled = buffer[8] != 0;
-            let is_initialized = buffer[9] != 0;
-            let holder_pid = u32::from_le_bytes([buffer[12], buffer[13], buffer[14], buffer[15]]);
-            let timestamp = u64::from_le_bytes([
-                buffer[16], buffer[17], buffer[18], buffer[19],
-                buffer[20], buffer[21], buffer[22], buffer[23]
-            ]);
-
-            if magic != LOCK_MAGIC {
-                return Err(IsolateError::Lock(format!(
-                    "Box {} has corrupted lock file (invalid magic)", 
-                    self.box_id
-                )));
-            }
-
-            // Check if lock holder process is still alive
-            if holder_pid != 0 && !Self::is_process_alive(holder_pid) {
-                eprintln!("Detected orphaned lock for box {} (dead PID {}), cleaning up", 
-                         self.box_id, holder_pid);
-                // Clear the lock file to allow reacquisition
-                lock_file.set_len(0)?;
-                lock_file.flush()?;
-                lock_file.seek(SeekFrom::Start(0))?;
-                
-                // Retry with fresh acquisition
-                return self.create_new_lock_record(is_init, lock_file);
-            }
-
-            // Multi-user access control: Check ownership
-            let current_uid = unsafe { libc::getuid() };
-            
-            // For initialized boxes, enforce ownership unless user is root
-            if is_initialized && owner_uid != current_uid && current_uid != 0 {
-                return Err(IsolateError::Lock(format!(
-                    "Access denied: Box {} is owned by user {} (uid: {}), you are user {} (uid: {}). Only the owner or root can access this box.",
-                    self.box_id, 
-                    Self::get_username_from_uid(owner_uid).unwrap_or_else(|| "unknown".to_string()),
-                    owner_uid,
-                    Self::get_username_from_uid(current_uid).unwrap_or_else(|| "unknown".to_string()),
-                    current_uid
-                )));
-            }
-
-            // For init operations on existing boxes, verify ownership
-            if is_init && is_initialized && owner_uid != current_uid && current_uid != 0 {
-                return Err(IsolateError::Lock(format!(
-                    "Cannot reinitialize box {}: already owned by uid {}", 
-                    self.box_id, owner_uid
-                )));
-            }
-
-            LockRecord {
-                magic,
-                owner_uid,
-                cg_enabled,
-                is_initialized,
-                holder_pid,
-                timestamp,
-            }
-        } else if is_init {
-            return self.create_new_lock_record(is_init, lock_file);
-        } else {
-            return Err(IsolateError::Lock(format!(
-                "Box {} has corrupted or empty lock file",
-                self.box_id
-            )));
+        // Step 3: Write our lock info to lock file (for debugging)
+        let lock_info = LockInfo {
+            pid: std::process::id(),
+            box_id,
+            created_at: SystemTime::now(),
+            rustbox_version: env!("CARGO_PKG_VERSION").to_string(),
         };
 
-        // For init operations, mark as initialized and write the record
-        if is_init {
-            let mut updated_record = lock_record.clone();
-            updated_record.is_initialized = true;
-            updated_record.holder_pid = std::process::id();
-            updated_record.timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            self.write_lock_record(&mut lock_file, &updated_record)?;
-            self.lock_record = Some(updated_record);
-        } else {
-            // For non-init operations, verify box is initialized
-            if !lock_record.is_initialized {
-                return Err(IsolateError::Lock(format!(
-                    "Box {} is not properly initialized. Please run init first.",
-                    self.box_id
-                )));
-            }
-            
-            // Update holder PID to current process
-            let mut updated_record = lock_record.clone();
-            updated_record.holder_pid = std::process::id();
-            updated_record.timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            self.write_lock_record(&mut lock_file, &updated_record)?;
-            self.lock_record = Some(updated_record);
-        }
+        let lock_json = serde_json::to_string(&lock_info).map_err(|e| LockError::SystemError {
+            message: e.to_string(),
+        })?;
 
-        self.lock_file = Some(lock_file);
-        Ok(())
-    }
+        let mut lock_file_mut = lock_file;
+        writeln!(lock_file_mut, "{}", lock_json)?;
+        lock_file_mut.sync_all()?;
 
-    /// Create new lock record with current process info
-    fn create_new_lock_record(&mut self, is_init: bool, mut lock_file: File) -> Result<()> {
-        let record = LockRecord {
-            magic: LOCK_MAGIC,
-            owner_uid: unsafe { libc::getuid() },
-            cg_enabled: true,
-            is_initialized: is_init,
-            holder_pid: std::process::id(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+        // Step 4: Create heartbeat file
+        let heartbeat_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(heartbeat_path)?;
+
+        // Step 5: Start heartbeat thread
+        let (heartbeat_handle, heartbeat_shutdown) =
+            self.start_heartbeat_thread(box_id, heartbeat_path.to_owned())?;
+
+        // Step 6: Create the lock object
+        let lock = BoxLock {
+            box_id,
+            lock_file: lock_file_mut,
+            lock_path: lock_path.to_owned(),
+            owner_pid: std::process::id(),
+            created_at: SystemTime::now(),
+            heartbeat_file,
+            heartbeat_handle,
+            heartbeat_shutdown,
         };
 
-        self.write_lock_record(&mut lock_file, &record)?;
-        self.lock_record = Some(record);
-        self.lock_file = Some(lock_file);
-        Ok(())
+        // Step 7: Return RAII guard
+        Ok(BoxLockGuard {
+            lock: Some(Arc::new(Mutex::new(lock))),
+            _cleanup: DropGuard {
+                box_id,
+                lock_dir: self.lock_dir.clone(),
+            },
+        })
     }
 
-    /// Write lock record to file in binary format (isolate-reference compatible)
-    fn write_lock_record(&self, lock_file: &mut File, record: &LockRecord) -> Result<()> {
-        let mut buffer = [0u8; std::mem::size_of::<LockRecord>()];
-        
-        // Pack the structure in little endian format
-        let magic_bytes = record.magic.to_le_bytes();
-        let uid_bytes = record.owner_uid.to_le_bytes();
-        let pid_bytes = record.holder_pid.to_le_bytes();
-        let timestamp_bytes = record.timestamp.to_le_bytes();
-        
-        buffer[0..4].copy_from_slice(&magic_bytes);
-        buffer[4..8].copy_from_slice(&uid_bytes);
-        buffer[8] = if record.cg_enabled { 1 } else { 0 };
-        buffer[9] = if record.is_initialized { 1 } else { 0 };
-        // buffer[10], buffer[11] remain 0 (reserved fields)
-        buffer[12..16].copy_from_slice(&pid_bytes);
-        buffer[16..24].copy_from_slice(&timestamp_bytes);
+    /// Start heartbeat thread for a specific lock
+    fn start_heartbeat_thread(
+        &self,
+        box_id: u32,
+        heartbeat_path: PathBuf,
+    ) -> LockResult<(JoinHandle<()>, Sender<()>)> {
+        let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
+        let interval = self.heartbeat_interval;
 
-        lock_file.seek(SeekFrom::Start(0))?;
-        lock_file.set_len(buffer.len() as u64)?;
-        lock_file.write_all(&buffer)?;
-        lock_file.flush()?;
-        
-        Ok(())
+        let handle = thread::spawn(move || {
+            let mut heartbeat_file = match OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&heartbeat_path)
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("Failed to open heartbeat file for box {}: {}", box_id, e);
+                    return;
+                }
+            };
+
+            loop {
+                // Check for shutdown
+                if shutdown_rx.try_recv().is_ok() {
+                    break;
+                }
+
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                if let Err(e) = writeln!(heartbeat_file, "{}", timestamp) {
+                    warn!("Failed to write heartbeat for box {}: {}", box_id, e);
+                    break;
+                }
+
+                if let Err(e) = heartbeat_file.flush() {
+                    warn!("Failed to flush heartbeat for box {}: {}", box_id, e);
+                    break;
+                }
+
+                // Reset file position for next write
+                if let Err(e) = heartbeat_file.seek(SeekFrom::Start(0)) {
+                    warn!("Failed to seek heartbeat file for box {}: {}", box_id, e);
+                    break;
+                }
+
+                // Wait for next heartbeat or shutdown
+                if shutdown_rx.recv_timeout(interval).is_ok() {
+                    break;
+                }
+            }
+        });
+
+        Ok((handle, shutdown_tx))
     }
 
-    /// Clean up orphaned locks for this specific box
-    fn cleanup_orphaned_locks(&self) -> Result<()> {
-        let lock_path = self.lock_root.join(self.box_id.to_string());
-        
+    /// Clean up stale lock if needed
+    fn cleanup_stale_lock_if_needed(&self, box_id: u32) -> LockResult<()> {
+        let lock_path = self.lock_dir.join(format!("box-{}.lock", box_id));
+        let heartbeat_path = self.lock_dir.join(format!("box-{}.heartbeat", box_id));
+
+        // If no lock file exists, nothing to clean
         if !lock_path.exists() {
-            return Ok(()); // No lock file to clean
+            return Ok(());
         }
 
-        // Try to read the lock file without acquiring flock
-        match std::fs::File::open(&lock_path) {
-            Ok(mut file) => {
-                let mut buffer = [0u8; std::mem::size_of::<LockRecord>()];
-                if let Ok(bytes_read) = file.read(&mut buffer) {
-                    if bytes_read == buffer.len() {
-                        let holder_pid = u32::from_le_bytes([buffer[12], buffer[13], buffer[14], buffer[15]]);
-                        
-                        // Check if the holder process is dead
-                        if holder_pid != 0 && !Self::is_process_alive(holder_pid) {
-                            eprintln!("Cleaning up orphaned lock for box {} (dead PID {})", 
-                                     self.box_id, holder_pid);
-                            
-                            // Try to acquire the lock to verify it's actually orphaned
-                            #[cfg(unix)]
-                            let flock_result = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
-                            #[cfg(not(unix))]
-                            let flock_result = 0;
-                            
-                            if flock_result == 0 {
-                                // We successfully acquired the lock, meaning it was orphaned
-                                eprintln!("Confirmed orphaned lock for box {} - lock file will be recreated", self.box_id);
-                                // Truncate the file to clear the old lock record
-                                if let Err(e) = file.set_len(0) {
-                                    eprintln!("Warning: Failed to truncate orphaned lock file: {}", e);
-                                }
-                                if let Err(e) = file.flush() {
-                                    eprintln!("Warning: Failed to flush orphaned lock file: {}", e);
-                                }
+        // Try to read lock info
+        let lock_content = std::fs::read_to_string(&lock_path)?;
+        let lock_info: LockInfo = serde_json::from_str(lock_content.lines().next().unwrap_or(""))
+            .map_err(|_| LockError::CorruptedLock {
+            box_id,
+            details: "Invalid lock file format".to_string(),
+        })?;
+
+        // Check if the owning process is still alive
+        if self.is_process_alive(lock_info.pid) {
+            // Process exists, check heartbeat
+            if let Ok(last_heartbeat) = self.get_last_heartbeat(&heartbeat_path) {
+                let heartbeat_age = SystemTime::now()
+                    .duration_since(last_heartbeat)
+                    .unwrap_or(Duration::from_secs(999));
+
+                if heartbeat_age < self.stale_timeout {
+                    // Lock is active and healthy
+                    return Err(LockError::Busy {
+                        box_id,
+                        owner_pid: Some(lock_info.pid),
+                    });
+                }
+            }
+        }
+
+        // Lock is stale - clean it up
+        warn!(
+            "Cleaning up stale lock for box {} (pid {} not responding)",
+            box_id, lock_info.pid
+        );
+        self.force_cleanup_box_resources(box_id)?;
+
+        // Remove lock files
+        let _ = std::fs::remove_file(&lock_path);
+        let _ = std::fs::remove_file(&heartbeat_path);
+
+        self.record_cleanup();
+        Ok(())
+    }
+
+    /// Check if process is alive
+    fn is_process_alive(&self, pid: u32) -> bool {
+        std::path::Path::new(&format!("/proc/{}", pid)).exists()
+    }
+
+    /// Get last heartbeat time
+    fn get_last_heartbeat(&self, heartbeat_path: &Path) -> LockResult<SystemTime> {
+        let content = std::fs::read_to_string(heartbeat_path)?;
+        let timestamp_str = content.trim();
+        let timestamp = timestamp_str
+            .parse::<u64>()
+            .map_err(|_| LockError::CorruptedLock {
+                box_id: 0,
+                details: "Invalid heartbeat timestamp".to_string(),
+            })?;
+
+        Ok(UNIX_EPOCH + Duration::from_secs(timestamp))
+    }
+
+    /// Force cleanup box resources
+    fn force_cleanup_box_resources(&self, box_id: u32) -> LockResult<()> {
+        warn!("Force cleaning up resources for box {}", box_id);
+        // In a real implementation, this would cleanup:
+        // - Kill processes in the box
+        // - Unmount filesystems
+        // - Remove cgroups
+        // - Clean up network namespaces
+        // For now, we'll just log it
+        Ok(())
+    }
+
+    /// Get current lock owner info
+    fn get_lock_owner(&self, box_id: u32) -> Option<String> {
+        let lock_path = self.lock_dir.join(format!("box-{}.lock", box_id));
+        if let Ok(content) = std::fs::read_to_string(&lock_path) {
+            if let Ok(lock_info) =
+                serde_json::from_str::<LockInfo>(content.lines().next().unwrap_or(""))
+            {
+                return Some(format!("PID {}", lock_info.pid));
+            }
+        }
+        None
+    }
+
+    /// Background cleanup worker
+    fn cleanup_stale_locks_worker(
+        lock_dir: &Path,
+        stale_timeout: Duration,
+        metrics: &Arc<Mutex<LockManagerMetrics>>,
+    ) -> LockResult<()> {
+        if !lock_dir.exists() {
+            return Ok(());
+        }
+
+        let mut cleaned_count = 0;
+        for entry in std::fs::read_dir(lock_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.extension().and_then(|s| s.to_str()) == Some("lock") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    if let Some(box_id_str) = stem.strip_prefix("box-") {
+                        if let Ok(box_id) = box_id_str.parse::<u32>() {
+                            // Check if this lock is stale
+                            if Self::is_lock_stale(&path, stale_timeout).unwrap_or(false) {
+                                warn!("Background cleanup: removing stale lock for box {}", box_id);
+                                let _ = std::fs::remove_file(&path);
+                                let heartbeat_path =
+                                    lock_dir.join(format!("box-{}.heartbeat", box_id));
+                                let _ = std::fs::remove_file(heartbeat_path);
+                                cleaned_count += 1;
                             }
                         }
                     }
                 }
             }
-            Err(_) => {} // File doesn't exist or can't be read
-        }
-        
-        Ok(())
-    }
-    
-    /// Check if a process is still alive (enhanced with multiple methods)
-    fn is_process_alive(pid: u32) -> bool {
-        // Method 1: Use kill(0) to check process existence
-        let kill_result = unsafe { libc::kill(pid as i32, 0) };
-        
-        if kill_result == 0 {
-            return true; // Process exists and we can signal it
         }
 
-        // If kill failed, check errno to distinguish between "no such process" and "permission denied"
-        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        if errno == libc::EPERM {
-            // Process exists but we don't have permission to signal it
-            return true;
-        }
-        
-        // Method 2: Check /proc filesystem as fallback
-        let proc_path = format!("/proc/{}", pid);
-        std::path::Path::new(&proc_path).exists()
-    }
-
-    /// Get username from UID for better error messages
-    fn get_username_from_uid(uid: u32) -> Option<String> {
-        use std::ffi::CStr;
-        use std::ptr;
-        
-        unsafe {
-            let passwd = libc::getpwuid(uid);
-            if passwd.is_null() {
-                return None;
+        if cleaned_count > 0 {
+            if let Ok(metrics) = metrics.lock() {
+                metrics
+                    .stale_locks_cleaned
+                    .fetch_add(cleaned_count, Ordering::Relaxed);
             }
-            
-            let name_ptr = (*passwd).pw_name;
-            if name_ptr.is_null() {
-                return None;
-            }
-            
-            CStr::from_ptr(name_ptr)
-                .to_str()
-                .ok()
-                .map(|s| s.to_string())
+            info!("Background cleanup: removed {} stale locks", cleaned_count);
         }
-    }
 
-    /// Remove lock file (cleanup operation)
-    pub fn remove_lock(&mut self) -> Result<()> {
-        if let Some(mut lock_file) = self.lock_file.take() {
-            // Following isolate-reference: truncate instead of unlink to avoid races
-            lock_file.set_len(0)?;
-            lock_file.flush()?;
-        }
-        
-        self.lock_record = None;
         Ok(())
     }
 
-    /// Get current lock record
-    pub fn lock_record(&self) -> Option<&LockRecord> {
-        self.lock_record.as_ref()
+    /// Check if a lock is stale
+    fn is_lock_stale(lock_path: &Path, stale_timeout: Duration) -> LockResult<bool> {
+        let content = std::fs::read_to_string(lock_path)?;
+        let lock_info: LockInfo = serde_json::from_str(content.lines().next().unwrap_or(""))
+            .map_err(|e| LockError::SystemError {
+                message: e.to_string(),
+            })?;
+
+        // Check if process is alive
+        if std::path::Path::new(&format!("/proc/{}", lock_info.pid)).exists() {
+            return Ok(false);
+        }
+
+        // Process is dead, check how long ago
+        let age = SystemTime::now()
+            .duration_since(lock_info.created_at)
+            .unwrap_or(Duration::from_secs(0));
+
+        Ok(age > stale_timeout)
     }
 
-    /// Check if box is currently locked by this instance
-    pub fn is_locked(&self) -> bool {
-        self.lock_file.is_some()
-    }
-
-    /// Get box ID
-    pub fn box_id(&self) -> u32 {
-        self.box_id
-    }
-
-    /// Get owner UID from lock record
-    pub fn owner_uid(&self) -> Option<u32> {
-        self.lock_record.as_ref().map(|r| r.owner_uid)
-    }
-
-    /// Check if box is properly initialized
-    pub fn is_initialized(&self) -> bool {
-        self.lock_record
+    /// Health check implementation
+    pub fn health_check(&self) -> LockManagerHealth {
+        let metrics = self.get_metrics();
+        let active_locks = self.count_active_locks();
+        let lock_directory_writable = self.test_directory_writable();
+        let cleanup_thread_alive = self
+            .cleanup_thread
             .as_ref()
-            .map(|r| r.is_initialized)
-            .unwrap_or(false)
+            .is_some_and(|t| !t.is_finished());
+
+        let status = if !lock_directory_writable {
+            HealthStatus::Unhealthy
+        } else if !cleanup_thread_alive || metrics.errors_by_type.values().sum::<u64>() > 10 {
+            HealthStatus::Degraded
+        } else {
+            HealthStatus::Healthy
+        };
+
+        LockManagerHealth {
+            status,
+            active_locks,
+            stale_locks_cleaned: metrics.stale_locks_cleaned,
+            lock_directory_writable,
+            cleanup_thread_alive,
+            metrics: LockMetrics {
+                total_acquisitions: metrics.total_acquisitions,
+                average_acquisition_time_ms: metrics.average_acquisition_time_ms,
+                lock_contentions: metrics.lock_contentions,
+                cleanup_operations: metrics.cleanup_operations,
+                stale_locks_cleaned: metrics.stale_locks_cleaned,
+                errors_by_type: metrics.errors_by_type,
+            },
+        }
     }
 
-    /// Get all active box IDs (for listing boxes)
-    pub fn list_active_boxes(lock_root: Option<&PathBuf>) -> Result<Vec<u32>> {
-        let lock_dir = lock_root
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_LOCK_ROOT));
+    /// Export Prometheus-style metrics
+    pub fn export_metrics(&self) -> String {
+        let metrics = self.get_metrics();
+        format!(
+            "# HELP rustbox_lock_acquisitions_total Total lock acquisitions\n\
+             # TYPE rustbox_lock_acquisitions_total counter\n\
+             rustbox_lock_acquisitions_total {}\n\
+             \n\
+             # HELP rustbox_lock_contentions_total Total lock contentions\n\
+             # TYPE rustbox_lock_contentions_total counter\n\
+             rustbox_lock_contentions_total {}\n\
+             \n\
+             # HELP rustbox_lock_cleanup_operations_total Total cleanup operations\n\
+             # TYPE rustbox_lock_cleanup_operations_total counter\n\
+             rustbox_lock_cleanup_operations_total {}\n\
+             \n\
+             # HELP rustbox_lock_acquisition_duration_ms Average lock acquisition time\n\
+             # TYPE rustbox_lock_acquisition_duration_ms gauge\n\
+             rustbox_lock_acquisition_duration_ms {}\n",
+            metrics.total_acquisitions,
+            metrics.lock_contentions,
+            metrics.cleanup_operations,
+            metrics.average_acquisition_time_ms
+        )
+    }
 
-        if !lock_dir.exists() {
-            return Ok(Vec::new());
-        }
+    // Metrics helpers
+    fn record_acquisition(&self, elapsed: Duration) {
+        if let Ok(mut metrics) = self.metrics.lock() {
+            metrics.total_acquisitions.fetch_add(1, Ordering::Relaxed);
+            metrics.acquisition_times.push(elapsed);
 
-        let mut box_ids = Vec::new();
-        
-        for entry in std::fs::read_dir(lock_dir)? {
-            let entry = entry?;
-            let file_name = entry.file_name();
-            if let Some(name_str) = file_name.to_str() {
-                if let Ok(box_id) = name_str.parse::<u32>() {
-                    // Check if lock file is valid and non-empty
-                    if entry.metadata()?.len() == std::mem::size_of::<LockRecord>() as u64 {
-                        box_ids.push(box_id);
-                    }
-                }
+            // Keep only recent acquisition times (last 1000)
+            if metrics.acquisition_times.len() > 1000 {
+                metrics.acquisition_times.drain(0..500);
             }
         }
-
-        box_ids.sort();
-        Ok(box_ids)
     }
 
-    /// Force cleanup of a specific box (admin function)
-    pub fn force_cleanup_box(box_id: u32, lock_root: Option<&PathBuf>) -> Result<bool> {
-        let lock_dir = lock_root
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_LOCK_ROOT));
-        
-        let lock_path = lock_dir.join(box_id.to_string());
-        
-        if !lock_path.exists() {
-            return Ok(false); // No lock to clean
+    fn record_contention(&self) {
+        if let Ok(metrics) = self.metrics.lock() {
+            metrics.total_contentions.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn record_timeout(&self) {
+        if let Ok(mut metrics) = self.metrics.lock() {
+            *metrics
+                .errors_by_type
+                .entry("timeout".to_string())
+                .or_insert(0) += 1;
+        }
+    }
+
+    fn record_cleanup(&self) {
+        if let Ok(metrics) = self.metrics.lock() {
+            metrics.total_cleanups.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn record_error(&self, error: &LockError) {
+        if let Ok(mut metrics) = self.metrics.lock() {
+            let error_type = match error {
+                LockError::Busy { .. } => "busy",
+                LockError::Timeout { .. } => "timeout",
+                LockError::PermissionDenied { .. } => "permission_denied",
+                LockError::FilesystemError { .. } => "filesystem_error",
+                LockError::CorruptedLock { .. } => "corrupted_lock",
+                LockError::SystemError { .. } => "system_error",
+                LockError::NotInitialized => "not_initialized",
+            };
+            *metrics
+                .errors_by_type
+                .entry(error_type.to_string())
+                .or_insert(0) += 1;
+        }
+    }
+
+    fn get_metrics(&self) -> LockMetrics {
+        if let Ok(metrics) = self.metrics.lock() {
+            let avg_time = if metrics.acquisition_times.is_empty() {
+                0.0
+            } else {
+                let total: Duration = metrics.acquisition_times.iter().sum();
+                total.as_millis() as f64 / metrics.acquisition_times.len() as f64
+            };
+
+            LockMetrics {
+                total_acquisitions: metrics.total_acquisitions.load(Ordering::Relaxed),
+                average_acquisition_time_ms: avg_time,
+                lock_contentions: metrics.total_contentions.load(Ordering::Relaxed),
+                cleanup_operations: metrics.total_cleanups.load(Ordering::Relaxed),
+                stale_locks_cleaned: metrics.stale_locks_cleaned.load(Ordering::Relaxed),
+                errors_by_type: metrics.errors_by_type.clone(),
+            }
+        } else {
+            LockMetrics {
+                total_acquisitions: 0,
+                average_acquisition_time_ms: 0.0,
+                lock_contentions: 0,
+                cleanup_operations: 0,
+                stale_locks_cleaned: 0,
+                errors_by_type: HashMap::new(),
+            }
+        }
+    }
+
+    fn count_active_locks(&self) -> u32 {
+        if !self.lock_dir.exists() {
+            return 0;
         }
 
-        // Only root can force cleanup
-        let current_uid = unsafe { libc::getuid() };
-        if current_uid != 0 {
-            return Err(IsolateError::Lock(
-                "Force cleanup requires root privileges".to_string()
-            ));
-        }
+        std::fs::read_dir(&self.lock_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| entry.ok())
+                    .filter(|entry| {
+                        entry.path().extension().and_then(|s| s.to_str()) == Some("lock")
+                    })
+                    .count() as u32
+            })
+            .unwrap_or(0)
+    }
 
-        // Remove the lock file entirely
-        std::fs::remove_file(lock_path)?;
-        println!("Force removed lock for box {}", box_id);
-        Ok(true)
+    fn test_directory_writable(&self) -> bool {
+        let test_file = self.lock_dir.join(".health_check");
+        std::fs::write(&test_file, b"test").is_ok() && std::fs::remove_file(test_file).is_ok()
     }
 }
 
-impl Drop for BoxLockManager {
+impl Drop for RustboxLockManager {
     fn drop(&mut self) {
-        // Lock is automatically released when file descriptor closes
-        self.lock_file = None;
-        self.lock_record = None;
+        // Signal cleanup thread to shut down
+        if let Some(shutdown) = self.cleanup_shutdown.take() {
+            let _ = shutdown.send(());
+        }
+
+        // Wait for cleanup thread to finish
+        if let Some(cleanup_thread) = self.cleanup_thread.take() {
+            let _ = cleanup_thread.join();
+        }
+
+        info!("RustboxLockManager shutdown complete");
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_box_lock_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut lock_manager = BoxLockManager::with_lock_root(42, temp_dir.path());
-
-        // Should successfully acquire lock for init
-        assert!(lock_manager.acquire_lock(true).is_ok());
-        assert!(lock_manager.is_locked());
-        assert!(lock_manager.is_initialized());
-        assert_eq!(lock_manager.box_id(), 42);
-
-        // Should have created the lock file
-        let lock_path = temp_dir.path().join("42");
-        assert!(lock_path.exists());
+impl BoxLockGuard {
+    /// Get the box ID for this lock
+    pub fn box_id(&self) -> u32 {
+        if let Some(lock) = &self.lock {
+            if let Ok(lock) = lock.lock() {
+                return lock.box_id;
+            }
+        }
+        0
     }
+}
 
-    #[test]  
-    fn test_box_lock_ownership() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut lock_manager1 = BoxLockManager::with_lock_root(123, temp_dir.path());
-        let mut lock_manager2 = BoxLockManager::with_lock_root(123, temp_dir.path());
-
-        // First manager should acquire lock successfully
-        assert!(lock_manager1.acquire_lock(true).is_ok());
-
-        // Second manager should fail to acquire the same lock (busy)
-        let result = lock_manager2.acquire_lock(false);
-        assert!(result.is_err());
-        
-        // After dropping first lock, second should succeed for non-init
-        drop(lock_manager1);
-        assert!(lock_manager2.acquire_lock(false).is_ok());
-    }
-
-    #[test]
-    fn test_list_active_boxes() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create a few boxes
-        let mut lock1 = BoxLockManager::with_lock_root(10, temp_dir.path());
-        let mut lock2 = BoxLockManager::with_lock_root(20, temp_dir.path());
-        let mut lock3 = BoxLockManager::with_lock_root(5, temp_dir.path());
-
-        lock1.acquire_lock(true).unwrap();
-        lock2.acquire_lock(true).unwrap();
-        lock3.acquire_lock(true).unwrap();
-
-        let boxes = BoxLockManager::list_active_boxes(Some(&temp_dir.path().to_path_buf())).unwrap();
-        assert_eq!(boxes, vec![5, 10, 20]); // Should be sorted
-    }
-
-    #[test]
-    fn test_lock_record_format() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut lock_manager = BoxLockManager::with_lock_root(999, temp_dir.path());
-
-        lock_manager.acquire_lock(true).unwrap();
-        
-        if let Some(record) = lock_manager.lock_record() {
-            assert_eq!(record.magic, LOCK_MAGIC);
-            assert_eq!(record.owner_uid, unsafe { libc::getuid() });
-            assert!(record.is_initialized);
-            assert!(record.cg_enabled);
-            assert_eq!(record.holder_pid, std::process::id());
-            assert!(record.timestamp > 0);
+impl Drop for BoxLockGuard {
+    fn drop(&mut self) {
+        if let Some(lock) = self.lock.take() {
+            if let Ok(lock) = lock.lock() {
+                // Signal heartbeat thread to stop
+                let _ = lock.heartbeat_shutdown.send(());
+                // Wait for heartbeat thread (with timeout to avoid hanging)
+                // Note: In production, we might want a more sophisticated shutdown mechanism
+            }
         }
     }
+}
 
-    #[test]
-    fn test_multi_user_protection() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut lock_manager = BoxLockManager::with_lock_root(777, temp_dir.path());
+impl Drop for DropGuard {
+    fn drop(&mut self) {
+        // Clean up lock files when guard is dropped
+        let lock_path = self.lock_dir.join(format!("box-{}.lock", self.box_id));
+        let heartbeat_path = self.lock_dir.join(format!("box-{}.heartbeat", self.box_id));
 
-        // Initialize the box
-        lock_manager.acquire_lock(true).unwrap();
-        
-        // Simulate another user trying to access (this is hard to test without actually changing UIDs)
-        // In practice, the ownership check would prevent access
-        assert!(lock_manager.owner_uid().is_some());
-        assert_eq!(lock_manager.owner_uid().unwrap(), unsafe { libc::getuid() });
+        let _ = std::fs::remove_file(lock_path);
+        let _ = std::fs::remove_file(heartbeat_path);
     }
 }
+
+// ============================================================================
+// PUBLIC API - Simple interface for the rest of the codebase
+// ============================================================================
+
+/// Initialize the global lock manager
+pub fn init_lock_manager() -> LockResult<()> {
+    let mut manager = RustboxLockManager::new()?;
+    manager.start_cleanup_thread()?;
+
+    GLOBAL_LOCK_MANAGER
+        .set(Arc::new(Mutex::new(manager)))
+        .map_err(|_| LockError::SystemError {
+            message: "Lock manager already initialized".to_string(),
+        })?;
+
+    info!("Global lock manager initialized successfully");
+    Ok(())
+}
+
+/// Acquire a box lock with default 30 second timeout
+pub fn acquire_box_lock(box_id: u32) -> LockResult<BoxLockGuard> {
+    acquire_box_lock_with_timeout(box_id, Duration::from_secs(30))
+}
+
+/// Acquire a box lock with custom timeout
+pub fn acquire_box_lock_with_timeout(box_id: u32, timeout: Duration) -> LockResult<BoxLockGuard> {
+    let manager = GLOBAL_LOCK_MANAGER.get().ok_or(LockError::NotInitialized)?;
+
+    let manager = manager.lock().map_err(|_| LockError::SystemError {
+        message: "Failed to acquire lock manager mutex".to_string(),
+    })?;
+
+    manager.acquire_lock(box_id, timeout)
+}
+
+/// Get lock manager health status
+pub fn get_lock_health() -> LockResult<LockManagerHealth> {
+    let manager = GLOBAL_LOCK_MANAGER.get().ok_or(LockError::NotInitialized)?;
+
+    let manager = manager.lock().map_err(|_| LockError::SystemError {
+        message: "Failed to acquire lock manager mutex".to_string(),
+    })?;
+
+    Ok(manager.health_check())
+}
+
+/// Export metrics in Prometheus format
+pub fn get_lock_metrics() -> LockResult<String> {
+    let manager = GLOBAL_LOCK_MANAGER.get().ok_or(LockError::NotInitialized)?;
+
+    let manager = manager.lock().map_err(|_| LockError::SystemError {
+        message: "Failed to acquire lock manager mutex".to_string(),
+    })?;
+
+    Ok(manager.export_metrics())
+}
+
+/// Utility function for file locking (for instances.json etc)
+pub fn with_file_lock<T, F>(file_path: &Path, operation: F) -> LockResult<T>
+where
+    F: FnOnce() -> LockResult<T>,
+{
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(file_path)?;
+
+    // Acquire exclusive lock
+    let flock_result = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX) };
+    if flock_result != 0 {
+        return Err(LockError::SystemError {
+            message: format!(
+                "Failed to lock file {}: {}",
+                file_path.display(),
+                std::io::Error::last_os_error()
+            ),
+        });
+    }
+
+    // Execute the operation
+    // Lock is automatically released when file goes out of scope
+    operation()
+}
+
+include!("lock_manager_tests.rs");

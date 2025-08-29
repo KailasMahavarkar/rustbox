@@ -264,10 +264,118 @@ pub enum IsolateError {
 
     #[error("Resource limit error: {0}")]
     ResourceLimit(String),
+
+    // New enhanced lock errors
+    #[error("Advanced lock error: {0}")]
+    AdvancedLock(#[from] LockError),
+}
+
+/// Rich error types for the new locking system
+#[derive(Debug, thiserror::Error)]
+pub enum LockError {
+    #[error("Box {box_id} is busy (owned by PID {owner_pid:?})")]
+    Busy { 
+        box_id: u32, 
+        owner_pid: Option<u32> 
+    },
+
+    #[error("Timeout waiting for box {box_id} after {waited:?} (current owner: {current_owner:?})")]
+    Timeout {
+        box_id: u32,
+        waited: std::time::Duration,
+        current_owner: Option<String>
+    },
+
+    #[error("Lock directory permission denied: {details}")]
+    PermissionDenied { 
+        details: String 
+    },
+
+    #[error("Filesystem error: {source}")]
+    FilesystemError { 
+        #[from] source: std::io::Error 
+    },
+
+    #[error("Lock corruption detected for box {box_id}: {details}")]
+    CorruptedLock { 
+        box_id: u32, 
+        details: String 
+    },
+
+    #[error("System error: {message}")]
+    SystemError { 
+        message: String 
+    },
+
+    #[error("Heartbeat failed for box {box_id}: {reason}")]
+    HeartbeatFailed {
+        box_id: u32,
+        reason: String,
+    },
+
+    #[error("Lock manager not initialized")]
+    NotInitialized,
+}
+
+/// Convert to user-friendly exit codes and messages
+impl From<LockError> for i32 {
+    fn from(err: LockError) -> i32 {
+        match err {
+            LockError::Busy { .. } => 2,           // Temporary failure
+            LockError::Timeout { .. } => 3,        // Timeout
+            LockError::PermissionDenied { .. } => 77,  // Permission error
+            LockError::FilesystemError { .. } => 74,   // IO error
+            LockError::CorruptedLock { .. } => 75,     // Data error
+            LockError::SystemError { .. } => 76,      // Service unavailable
+            LockError::HeartbeatFailed { .. } => 78,  // Config error
+            LockError::NotInitialized => 1,           // General error
+        }
+    }
 }
 
 /// Result type alias for rustbox operations
 pub type Result<T> = std::result::Result<T, IsolateError>;
+
+/// Result type for new lock operations
+pub type LockResult<T> = std::result::Result<T, LockError>;
+
+/// Lock information stored in lock files
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockInfo {
+    pub pid: u32,
+    pub box_id: u32,
+    pub created_at: std::time::SystemTime,
+    pub rustbox_version: String,
+}
+
+/// Health status for the lock manager
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HealthStatus {
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
+/// Lock manager health information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockManagerHealth {
+    pub status: HealthStatus,
+    pub active_locks: u32,
+    pub stale_locks_cleaned: u64,
+    pub lock_directory_writable: bool,
+    pub cleanup_thread_alive: bool,
+    pub metrics: LockMetrics,
+}
+
+/// Metrics for lock operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockMetrics {
+    pub total_acquisitions: u64,
+    pub average_acquisition_time_ms: f64,
+    pub lock_contentions: u64,
+    pub cleanup_operations: u64,
+    pub errors_by_type: HashMap<String, u64>,
+}
 impl From<std::process::Output> for ExecutionResult {
     fn from(output: std::process::Output) -> Self {
         let status = if output.status.success() {

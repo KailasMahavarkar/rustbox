@@ -15,12 +15,14 @@ impl Cgroup {
     pub fn new(name: &str, strict_mode: bool) -> Result<Self> {
         // Validate and sanitize the name
         if name.is_empty() || name.len() > 255 {
-            return Err(IsolateError::Cgroup("Invalid cgroup name length".to_string()));
+            return Err(IsolateError::Cgroup(
+                "Invalid cgroup name length".to_string(),
+            ));
         }
-        
+
         let sanitized_name = name.replace("/", "_").replace("..", "_");
         let cgroup_base = "/sys/fs/cgroup";
-        
+
         // Initialize paths for all controllers
         let mut cgroup_paths = std::collections::HashMap::new();
 
@@ -59,11 +61,13 @@ impl Cgroup {
         // Create controller paths and directories
         let controllers_to_use = ["memory", "cpu", "cpuacct", "pids"];
         let mut creation_errors = Vec::new();
-        
+
         for controller in &controllers_to_use {
             if available_controllers.contains(*controller) {
-                let controller_path = Path::new(cgroup_base).join(controller).join(&sanitized_name);
-                
+                let controller_path = Path::new(cgroup_base)
+                    .join(controller)
+                    .join(&sanitized_name);
+
                 match fs::create_dir_all(&controller_path) {
                     Ok(_) => {
                         cgroup_paths.insert(controller.to_string(), controller_path);
@@ -74,7 +78,7 @@ impl Cgroup {
                 }
             }
         }
-        
+
         if strict_mode {
             let required_controllers = vec!["memory", "cpu", "cpuacct"];
             for controller in &required_controllers {
@@ -100,7 +104,10 @@ impl Cgroup {
                     creation_errors
                 )));
             } else {
-                eprintln!("Warning: Failed to create cgroup directories: {:?}", creation_errors);
+                eprintln!(
+                    "Warning: Failed to create cgroup directories: {:?}",
+                    creation_errors
+                );
                 return Ok(Self {
                     name: sanitized_name,
                     cgroup_paths: std::collections::HashMap::new(),
@@ -121,12 +128,18 @@ impl Cgroup {
     /// Validate memory limit value
     fn validate_memory_limit(limit_bytes: u64) -> Result<()> {
         if limit_bytes == 0 {
-            return Err(IsolateError::Cgroup("Memory limit cannot be zero".to_string()));
+            return Err(IsolateError::Cgroup(
+                "Memory limit cannot be zero".to_string(),
+            ));
         }
-        if limit_bytes < 1024 * 1024 { // 1MB minimum
-            return Err(IsolateError::Cgroup("Memory limit too small (minimum 1MB)".to_string()));
+        if limit_bytes < 1024 * 1024 {
+            // 1MB minimum
+            return Err(IsolateError::Cgroup(
+                "Memory limit too small (minimum 1MB)".to_string(),
+            ));
         }
-        if limit_bytes > (1u64 << 50) { // 1PB maximum (reasonable upper bound)
+        if limit_bytes > (1u64 << 50) {
+            // 1PB maximum (reasonable upper bound)
             return Err(IsolateError::Cgroup("Memory limit too large".to_string()));
         }
         Ok(())
@@ -139,8 +152,9 @@ impl Cgroup {
 
         Self::validate_memory_limit(limit_bytes)?;
 
-        let memory_path = self.cgroup_paths.get("memory")
-            .ok_or_else(|| IsolateError::Cgroup("Memory controller path not available".to_string()))?;
+        let memory_path = self.cgroup_paths.get("memory").ok_or_else(|| {
+            IsolateError::Cgroup("Memory controller path not available".to_string())
+        })?;
 
         // Set memory limit
         let limit_file = memory_path.join("memory.limit_in_bytes");
@@ -150,8 +164,9 @@ impl Cgroup {
         // Set memory+swap limit (if available) - this is critical for security
         let memsw_file = memory_path.join("memory.memsw.limit_in_bytes");
         if memsw_file.exists() {
-            fs::write(&memsw_file, limit_bytes.to_string())
-                .map_err(|e| IsolateError::Cgroup(format!("Failed to set memory+swap limit: {}", e)))?;
+            fs::write(&memsw_file, limit_bytes.to_string()).map_err(|e| {
+                IsolateError::Cgroup(format!("Failed to set memory+swap limit: {}", e))
+            })?;
         }
 
         // Disable swap accounting if available (for better predictability)
@@ -171,11 +186,14 @@ impl Cgroup {
         // Validate CPU shares (standard range is 2-262144)
         if cpu_shares < 2 || cpu_shares > 262144 {
             return Err(IsolateError::Cgroup(format!(
-                "Invalid CPU shares: {} (must be between 2 and 262144)", cpu_shares
+                "Invalid CPU shares: {} (must be between 2 and 262144)",
+                cpu_shares
             )));
         }
 
-        let cpu_path = self.cgroup_paths.get("cpu")
+        let cpu_path = self
+            .cgroup_paths
+            .get("cpu")
             .ok_or_else(|| IsolateError::Cgroup("CPU controller path not available".to_string()))?;
 
         // Set CPU shares
@@ -193,14 +211,20 @@ impl Cgroup {
 
         // Validate process limit
         if limit == 0 {
-            return Err(IsolateError::Cgroup("Process limit cannot be zero".to_string()));
+            return Err(IsolateError::Cgroup(
+                "Process limit cannot be zero".to_string(),
+            ));
         }
-        if limit > 32768 { // Reasonable upper bound
-            return Err(IsolateError::Cgroup("Process limit too high (maximum 32768)".to_string()));
+        if limit > 32768 {
+            // Reasonable upper bound
+            return Err(IsolateError::Cgroup(
+                "Process limit too high (maximum 32768)".to_string(),
+            ));
         }
 
-        let pids_path = self.cgroup_paths.get("pids")
-            .ok_or_else(|| IsolateError::Cgroup("PIDs controller path not available".to_string()))?;
+        let pids_path = self.cgroup_paths.get("pids").ok_or_else(|| {
+            IsolateError::Cgroup("PIDs controller path not available".to_string())
+        })?;
 
         let max_file = pids_path.join("pids.max");
         fs::write(&max_file, limit.to_string())
@@ -214,12 +238,15 @@ impl Cgroup {
         if pid == 0 {
             return Err(IsolateError::Cgroup("Invalid PID: 0".to_string()));
         }
-        
+
         let proc_path = format!("/proc/{}", pid);
         if !Path::new(&proc_path).exists() {
-            return Err(IsolateError::Cgroup(format!("Process {} does not exist", pid)));
+            return Err(IsolateError::Cgroup(format!(
+                "Process {} does not exist",
+                pid
+            )));
         }
-        
+
         Ok(())
     }
 
@@ -235,7 +262,7 @@ impl Cgroup {
 
         // Try to add process to all available controllers atomically
         let controllers = ["memory", "cpu", "cpuacct", "pids"];
-        
+
         for controller in &controllers {
             if let Some(controller_path) = self.cgroup_paths.get(*controller) {
                 let tasks_file = controller_path.join("tasks");
@@ -248,18 +275,23 @@ impl Cgroup {
 
         // If any critical controller failed, this is an error
         let critical_controllers = ["memory", "cpu"];
-        let failed_critical = critical_controllers.iter()
-            .any(|c| self.available_controllers.contains(*c) && !successful_controllers.contains(c));
+        let failed_critical = critical_controllers.iter().any(|c| {
+            self.available_controllers.contains(*c) && !successful_controllers.contains(c)
+        });
 
         if failed_critical {
             return Err(IsolateError::Cgroup(format!(
-                "Failed to add process {} to critical cgroups. Errors: {:?}", 
+                "Failed to add process {} to critical cgroups. Errors: {:?}",
                 pid, errors
             )));
         }
 
         if !errors.is_empty() {
-            log::warn!("Some non-critical cgroup operations failed for PID {}: {:?}", pid, errors);
+            log::warn!(
+                "Some non-critical cgroup operations failed for PID {}: {:?}",
+                pid,
+                errors
+            );
         }
 
         Ok(())
@@ -270,13 +302,15 @@ impl Cgroup {
             return Ok(0);
         }
 
-        let memory_path = self.cgroup_paths.get("memory")
-            .ok_or_else(|| IsolateError::Cgroup("Memory controller path not available".to_string()))?;
-        
+        let memory_path = self.cgroup_paths.get("memory").ok_or_else(|| {
+            IsolateError::Cgroup("Memory controller path not available".to_string())
+        })?;
+
         let usage_file = memory_path.join("memory.max_usage_in_bytes");
-        let usage_content = fs::read_to_string(&usage_file)
-            .map_err(|e| IsolateError::Cgroup(format!("Failed to read peak memory usage: {}", e)))?;
-        
+        let usage_content = fs::read_to_string(&usage_file).map_err(|e| {
+            IsolateError::Cgroup(format!("Failed to read peak memory usage: {}", e))
+        })?;
+
         usage_content
             .trim()
             .parse()
@@ -289,17 +323,18 @@ impl Cgroup {
             return Ok(0);
         }
 
-        let memory_path = self.cgroup_paths.get("memory")
-            .ok_or_else(|| IsolateError::Cgroup("Memory controller path not available".to_string()))?;
-        
+        let memory_path = self.cgroup_paths.get("memory").ok_or_else(|| {
+            IsolateError::Cgroup("Memory controller path not available".to_string())
+        })?;
+
         let usage_file = memory_path.join("memory.usage_in_bytes");
-        let usage_content = fs::read_to_string(&usage_file)
-            .map_err(|e| IsolateError::Cgroup(format!("Failed to read current memory usage: {}", e)))?;
-        
-        usage_content
-            .trim()
-            .parse()
-            .map_err(|e| IsolateError::Cgroup(format!("Failed to parse current memory usage: {}", e)))
+        let usage_content = fs::read_to_string(&usage_file).map_err(|e| {
+            IsolateError::Cgroup(format!("Failed to read current memory usage: {}", e))
+        })?;
+
+        usage_content.trim().parse().map_err(|e| {
+            IsolateError::Cgroup(format!("Failed to parse current memory usage: {}", e))
+        })
     }
 
     /// Get comprehensive memory statistics from cgroup
@@ -310,14 +345,19 @@ impl Cgroup {
 
         let current = self.get_current_memory_usage().unwrap_or(0);
         let peak = self.get_peak_memory_usage().unwrap_or(0);
-        
+
         // Try to get memory limit
-        let memory_path = self.cgroup_paths.get("memory")
-            .ok_or_else(|| IsolateError::Cgroup("Memory controller path not available".to_string()))?;
-        
+        let memory_path = self.cgroup_paths.get("memory").ok_or_else(|| {
+            IsolateError::Cgroup("Memory controller path not available".to_string())
+        })?;
+
         let limit_file = memory_path.join("memory.limit_in_bytes");
         let limit = fs::read_to_string(&limit_file)
-            .and_then(|s| s.trim().parse::<u64>().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+            .and_then(|s| {
+                s.trim()
+                    .parse::<u64>()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            })
             .unwrap_or(u64::MAX);
 
         Ok((current, peak, limit))
@@ -362,14 +402,14 @@ impl Cgroup {
         // Check if current memory usage equals the limit (potential OOM)
         let limit_file = memory_path.join("memory.limit_in_bytes");
         let usage_file = memory_path.join("memory.usage_in_bytes");
-        
+
         if let (Ok(limit_content), Ok(usage_content)) = (
             fs::read_to_string(&limit_file),
-            fs::read_to_string(&usage_file)
+            fs::read_to_string(&usage_file),
         ) {
             if let (Ok(limit), Ok(usage)) = (
                 limit_content.trim().parse::<u64>(),
-                usage_content.trim().parse::<u64>()
+                usage_content.trim().parse::<u64>(),
             ) {
                 // If usage is very close to limit (within 1MB or 95% of limit), consider it OOM
                 let threshold = std::cmp::min(1024 * 1024, limit / 20); // 1MB or 5% of limit
@@ -443,14 +483,14 @@ impl Cgroup {
         let cpu_time = self.get_cpu_usage().unwrap_or(0.0);
         let memory_peak = self.get_peak_memory_usage().unwrap_or(0);
         let oom_killed = self.check_oom_killed();
-        
+
         (cpu_time, memory_peak, oom_killed)
     }
 
     /// Check if cgroup is in a resource limit violation state
     pub fn is_resource_limited(&self) -> (bool, bool) {
         let oom_killed = self.check_oom_killed();
-        
+
         // Check if memory usage is at or near limit
         let memory_limited = if let Ok(current) = self.get_current_memory_usage() {
             if let Some(memory_path) = self.cgroup_paths.get("memory") {
@@ -471,7 +511,7 @@ impl Cgroup {
         } else {
             false
         };
-        
+
         (oom_killed || memory_limited, false) // (memory_limited, cpu_limited)
     }
 
@@ -490,9 +530,8 @@ impl Cgroup {
                     for line in tasks_content.lines() {
                         if let Ok(pid) = line.trim().parse::<u32>() {
                             // Try to move process back to root cgroup
-                            let root_tasks = Path::new("/sys/fs/cgroup")
-                                .join(controller)
-                                .join("tasks");
+                            let root_tasks =
+                                Path::new("/sys/fs/cgroup").join(controller).join("tasks");
                             let _ = fs::write(&root_tasks, pid.to_string());
                         }
                     }
@@ -504,7 +543,7 @@ impl Cgroup {
         for (controller, path) in &self.cgroup_paths {
             if path.exists() {
                 match fs::remove_dir(path) {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(e) => {
                         cleanup_errors.push(format!("{}: {}", controller, e));
                     }
@@ -513,7 +552,10 @@ impl Cgroup {
         }
 
         if !cleanup_errors.is_empty() {
-            log::warn!("Some cgroup cleanup operations failed: {:?}", cleanup_errors);
+            log::warn!(
+                "Some cgroup cleanup operations failed: {:?}",
+                cleanup_errors
+            );
             // Don't return error for cleanup issues, just log them
         }
 
@@ -544,8 +586,6 @@ impl Cgroup {
     pub fn cgroups_available() -> bool {
         Path::new("/proc/cgroups").exists() && Path::new("/sys/fs/cgroup").exists()
     }
-
-
 }
 
 impl Drop for Cgroup {
@@ -557,4 +597,3 @@ impl Drop for Cgroup {
 pub fn cgroups_available() -> bool {
     Cgroup::cgroups_available()
 }
-

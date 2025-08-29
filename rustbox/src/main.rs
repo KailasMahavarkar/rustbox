@@ -1,7 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 /// rustbox: Secure Process Isolation and Resource Control System
 ///
 /// A modern, Rust-based implementation inspired by IOI Isolate, designed for secure
@@ -25,6 +23,7 @@ use std::sync::Arc;
 /// rustbox cleanup --box-id 0
 /// ```
 use rustbox::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -120,13 +119,8 @@ extern "C" fn signal_handler(sig: i32) {
     let box_id = CURRENT_BOX_ID.load(Ordering::Relaxed);
     if box_id != 0 {
         eprintln!("Signal {} received, cleaning up box {}", sig, box_id);
-        // Force cleanup of current box
-        let mut lock_manager = rustbox::BoxLockManager::new(box_id);
-        if let Err(e) = lock_manager.remove_lock() {
-            eprintln!("Failed to cleanup lock for box {}: {}", box_id, e);
-        } else {
-            eprintln!("Successfully cleaned up orphaned lock for box {}", box_id);
-        }
+        // The new lock system automatically cleans up on drop
+        eprintln!("Lock cleanup will be handled automatically by the enhanced lock manager");
     }
     std::process::exit(128 + sig);
 }
@@ -140,9 +134,15 @@ fn setup_signal_handlers() {
 
 fn main() -> Result<()> {
     setup_signal_handlers();
-    
+
     // Initialize structured logging for security monitoring
     env_logger::init();
+
+    // Initialize the enhanced lock manager
+    if let Err(e) = rustbox::lock_manager::init_lock_manager() {
+        eprintln!("Failed to initialize lock manager: {}", e);
+        std::process::exit(1);
+    }
 
     // Platform compatibility check - Unix-only for security features
     if !cfg!(unix) {
@@ -483,9 +483,13 @@ fn main() -> Result<()> {
                     // File exists as absolute path - execute directly
                     let file_path = std::path::Path::new(command_arg);
                     let code = std::fs::read_to_string(file_path)?;
-                    let language = match file_path.extension().and_then(|ext| ext.to_str()).unwrap_or("py") {
+                    let language = match file_path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("py")
+                    {
                         "py" => "python",
-                        "cpp" | "cc" | "cxx" => "cpp", 
+                        "cpp" | "cc" | "cxx" => "cpp",
                         "java" => "java",
                         _ => "python", // default
                     };
@@ -646,7 +650,7 @@ fn main() -> Result<()> {
             strict,
         } => {
             CURRENT_BOX_ID.store(box_id, Ordering::Relaxed);
-            
+
             // Security check for strict mode
             let is_root = unsafe { libc::getuid() } == 0;
 

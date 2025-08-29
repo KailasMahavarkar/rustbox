@@ -1,9 +1,9 @@
 /// Core types and structures for the rustbox system
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use thiserror::Error;
-
 
 /// Directory binding configuration for filesystem access
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,7 +41,10 @@ impl DirectoryBinding {
         let (source, target) = if path_part.contains('=') {
             let path_parts: Vec<&str> = path_part.split('=').collect();
             if path_parts.len() != 2 {
-                return Err("Invalid directory binding format. Use: source=target or source=target:options".to_string());
+                return Err(
+                    "Invalid directory binding format. Use: source=target or source=target:options"
+                        .to_string(),
+                );
             }
             (PathBuf::from(path_parts[0]), PathBuf::from(path_parts[1]))
         } else {
@@ -60,7 +63,7 @@ impl DirectoryBinding {
                 "noexec" => permissions = DirectoryPermissions::NoExec,
                 "maybe" => maybe = true,
                 "tmp" => is_tmp = true,
-                "" => {}, // Empty option
+                "" => {} // Empty option
                 _ => return Err(format!("Unknown directory binding option: {}", option)),
             }
         }
@@ -120,7 +123,8 @@ pub struct IsolateConfig {
     /// Redirect stdout to file (optional)
     pub stdout_file: Option<PathBuf>,
     /// Redirect stderr to file (optional)
-    pub stderr_file: Option<PathBuf>,    /// Enable TTY support for interactive programs
+    pub stderr_file: Option<PathBuf>,
+    /// Enable TTY support for interactive programs
     pub enable_tty: bool,
     /// Use pipes for real-time I/O instead of files
     pub use_pipes: bool,
@@ -131,7 +135,8 @@ pub struct IsolateConfig {
     /// Buffer size for I/O operations (bytes)
     pub io_buffer_size: usize,
     /// Text encoding for I/O operations
-    pub text_encoding: String,    /// Namespace isolation configuration
+    pub text_encoding: String,
+    /// Namespace isolation configuration
     pub enable_pid_namespace: bool,
     pub enable_mount_namespace: bool,
     pub enable_network_namespace: bool,
@@ -154,10 +159,10 @@ impl Default for IsolateConfig {
             wall_time_limit: Some(Duration::from_secs(20)),
             process_limit: Some(1),
             file_size_limit: Some(64 * 1024 * 1024), // 64MB
-            stack_limit: Some(8 * 1024 * 1024), // 8MB default stack
-            core_limit: Some(0), // Disable core dumps by default
+            stack_limit: Some(8 * 1024 * 1024),      // 8MB default stack
+            core_limit: Some(0),                     // Disable core dumps by default
             fd_limit: Some(64), // Default file descriptor limit (like isolate-reference)
-            disk_quota: None, // No disk quota by default
+            disk_quota: None,   // No disk quota by default
             enable_network: false,
             environment: Vec::new(),
             strict_mode: false,
@@ -233,7 +238,6 @@ pub enum ExecutionStatus {
     DiskQuotaExceeded,
 }
 
-
 /// Custom error types for rustbox
 #[derive(Error, Debug)]
 pub enum IsolateError {
@@ -263,6 +267,97 @@ pub enum IsolateError {
 
     #[error("Resource limit error: {0}")]
     ResourceLimit(String),
+
+    #[error("Advanced lock error: {0}")]
+    AdvancedLock(LockError),
+}
+
+/// Enhanced lock error types for the new locking system
+#[derive(Error, Debug)]
+pub enum LockError {
+    #[error("Box {box_id} is busy (owned by PID {owner_pid:?})")]
+    Busy { box_id: u32, owner_pid: Option<u32> },
+
+    #[error(
+        "Timeout waiting for box {box_id} after {waited:?} (current owner: {current_owner:?})"
+    )]
+    Timeout {
+        box_id: u32,
+        waited: Duration,
+        current_owner: Option<String>,
+    },
+
+    #[error("Lock directory permission denied: {details}")]
+    PermissionDenied { details: String },
+
+    #[error("Filesystem error: {0}")]
+    FilesystemError(#[from] std::io::Error),
+
+    #[error("Lock corruption detected for box {box_id}: {details}")]
+    CorruptedLock { box_id: u32, details: String },
+
+    #[error("System error: {message}")]
+    SystemError { message: String },
+
+    #[error("Lock manager not initialized")]
+    NotInitialized,
+}
+
+/// Convert lock errors to appropriate exit codes
+impl From<LockError> for i32 {
+    fn from(err: LockError) -> i32 {
+        match err {
+            LockError::Busy { .. } => 2,              // Temporary failure
+            LockError::Timeout { .. } => 3,           // Timeout
+            LockError::PermissionDenied { .. } => 77, // Permission error
+            LockError::FilesystemError(_) => 74,      // IO error
+            LockError::CorruptedLock { .. } => 75,    // Data error
+            LockError::SystemError { .. } => 1,       // General error
+            LockError::NotInitialized => 1,           // General error
+        }
+    }
+}
+
+/// Result type for lock operations
+pub type LockResult<T> = std::result::Result<T, LockError>;
+
+/// Lock information stored in lock files
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockInfo {
+    pub pid: u32,
+    pub box_id: u32,
+    pub created_at: SystemTime,
+    pub rustbox_version: String,
+}
+
+/// Health status for lock manager
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HealthStatus {
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
+/// Lock manager health information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockManagerHealth {
+    pub status: HealthStatus,
+    pub active_locks: u32,
+    pub stale_locks_cleaned: u64,
+    pub lock_directory_writable: bool,
+    pub cleanup_thread_alive: bool,
+    pub metrics: LockMetrics,
+}
+
+/// Metrics for lock operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockMetrics {
+    pub total_acquisitions: u64,
+    pub average_acquisition_time_ms: f64,
+    pub lock_contentions: u64,
+    pub cleanup_operations: u64,
+    pub stale_locks_cleaned: u64,
+    pub errors_by_type: HashMap<String, u64>,
 }
 
 /// Result type alias for rustbox operations
@@ -280,7 +375,7 @@ impl From<std::process::Output> for ExecutionResult {
             status,
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            cpu_time: 0.0, // Not available from std::process::Output
+            cpu_time: 0.0,  // Not available from std::process::Output
             wall_time: 0.0, // Not available from std::process::Output
             memory_peak: 0, // Not available from std::process::Output
             signal: {
@@ -303,7 +398,8 @@ impl From<nix::errno::Errno> for IsolateError {
     fn from(err: nix::errno::Errno) -> Self {
         IsolateError::Process(err.to_string())
     }
-}impl Default for ExecutionStatus {
+}
+impl Default for ExecutionStatus {
     fn default() -> Self {
         ExecutionStatus::Success
     }

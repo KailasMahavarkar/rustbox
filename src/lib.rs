@@ -8,3 +8,5 @@ pub mod isolate;
 pub mod namespace;
 pub mod types;
 pub mod lock_manager;
+pub mod enhanced_lock_manager;
+pub mod lock_integration;

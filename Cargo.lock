@@ -713,6 +713,7 @@ dependencies = [
  "chrono",
  "clap",
  "env_logger",
+ "fastrand",
  "libc",
  "log",
  "nix",

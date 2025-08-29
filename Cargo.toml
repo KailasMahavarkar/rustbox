@@ -20,6 +20,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 env_logger = "0.10"
 log = "0.4"
+fastrand = "2.0"
 # Unix-only dependencies  
 nix = { version = "0.27", features = ["process", "signal", "fs", "user", "sched", "mount", "resource", "hostname"] }
 libc = "0.2"

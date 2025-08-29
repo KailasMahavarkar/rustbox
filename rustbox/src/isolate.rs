@@ -1,15 +1,12 @@
 /// Main isolate management interface
 use crate::executor::ProcessExecutor;
-use crate::lock_manager::BoxLockManager;
+use crate::lock_manager::{acquire_box_lock, with_file_lock, BoxLockGuard};
 use crate::types::{ExecutionResult, IsolateConfig, IsolateError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
-
-
 
 /// Persistent isolate instance configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -23,17 +20,21 @@ struct IsolateInstance {
 pub struct Isolate {
     instance: IsolateInstance,
     base_path: PathBuf,
-    lock_manager: Option<BoxLockManager>,
+    box_lock_guard: Option<BoxLockGuard>,
 }
 
 impl Isolate {
     /// Extract box ID from instance_id (format: "rustbox/{box_id}")
     fn extract_box_id(instance_id: &str) -> Result<u32> {
         if let Some(box_id_str) = instance_id.strip_prefix("rustbox/") {
-            box_id_str.parse::<u32>()
-                .map_err(|_| IsolateError::Config(format!("Invalid box ID in instance_id: {}", instance_id)))
+            box_id_str.parse::<u32>().map_err(|_| {
+                IsolateError::Config(format!("Invalid box ID in instance_id: {}", instance_id))
+            })
         } else {
-            Err(IsolateError::Config(format!("Instance ID must start with 'rustbox/': {}", instance_id)))
+            Err(IsolateError::Config(format!(
+                "Instance ID must start with 'rustbox/': {}",
+                instance_id
+            )))
         }
     }
 
@@ -55,7 +56,7 @@ impl Isolate {
         let mut isolate = Self {
             instance,
             base_path,
-            lock_manager: None,
+            box_lock_guard: None,
         };
 
         // Acquire lock before any operations
@@ -92,7 +93,7 @@ impl Isolate {
                 let isolate = Self {
                     instance: instance.clone(),
                     base_path,
-                    lock_file: None,
+                    box_lock_guard: None,
                 };
                 // Don't acquire lock for load - only for exclusive operations
                 Ok(Some(isolate))
@@ -117,7 +118,7 @@ impl Isolate {
         stdin_data: Option<&str>,
     ) -> Result<ExecutionResult> {
         // Acquire lock for execution to prevent conflicts
-        if self.lock_manager.is_none() {
+        if self.box_lock_guard.is_none() {
             self.acquire_lock(false)?;
         }
 
@@ -240,8 +241,8 @@ impl Isolate {
         // C++ compiler needs more processes for compilation phases
         self.instance.config.process_limit = Some(30);
 
-        if max_memory.is_some() {
-            self.instance.config.memory_limit = Some(max_memory.unwrap() * 1024 * 1024);
+        if let Some(memory) = max_memory {
+            self.instance.config.memory_limit = Some(memory * 1024 * 1024);
         } else {
             self.instance.config.memory_limit = Some(256 * 1024 * 1024); // 256MB for C++
         }
@@ -321,8 +322,8 @@ impl Isolate {
         self.instance.config.enable_network_namespace = false;
 
         // Increase resource limits for JVM
-        if max_memory.is_some() {
-            self.instance.config.memory_limit = Some(max_memory.unwrap() * 1024 * 1024);
+        if let Some(memory) = max_memory {
+            self.instance.config.memory_limit = Some(memory * 1024 * 1024);
         } else {
             self.instance.config.memory_limit = Some(512 * 1024 * 1024); // 512MB default for Java
         }
@@ -401,7 +402,7 @@ impl Isolate {
         let instance_id = self.instance.config.instance_id.clone();
 
         // Acquire lock for cleanup to prevent conflicts
-        if self.lock_manager.is_none() {
+        if self.box_lock_guard.is_none() {
             self.acquire_lock(false)?;
         }
 
@@ -511,80 +512,72 @@ impl Isolate {
         Ok(instances)
     }
 
-    /// Acquire exclusive lock for this isolate instance using BoxLockManager
-    fn acquire_lock(&mut self, is_init: bool) -> Result<()> {
+    /// Acquire exclusive lock for this isolate instance using enhanced lock manager
+    fn acquire_lock(&mut self, _is_init: bool) -> Result<()> {
         // Extract box_id from instance_id
         let box_id = Self::extract_box_id(&self.instance.config.instance_id)?;
-        
-        // Create and configure BoxLockManager
-        let mut lock_manager = BoxLockManager::new(box_id);
-        
-        // Acquire the lock
-        lock_manager.acquire_lock(is_init)?;
-        
-        // Store the lock manager
-        self.lock_manager = Some(lock_manager);
+
+        // Use the new enhanced lock system directly
+        let lock_guard = acquire_box_lock(box_id).map_err(IsolateError::AdvancedLock)?;
+
+        // Store the lock guard
+        self.box_lock_guard = Some(lock_guard);
         Ok(())
     }
 
-    /// Atomic update of instances.json with file locking
+    /// Atomic update of instances.json using enhanced lock manager
     fn atomic_instances_update<F>(&self, update_fn: F) -> Result<()>
     where
         F: FnOnce(&mut HashMap<String, IsolateInstance>),
     {
         let instances_dir = std::env::temp_dir().join("rustbox");
         fs::create_dir_all(&instances_dir)?;
-
         let instances_file = instances_dir.join("instances.json");
-        let instances_lock = instances_dir.join("instances.lock");
 
-        // Acquire global instances file lock
-        let lock_file = File::create(&instances_lock)?;
-
-        #[cfg(unix)]
-        {
-            let result = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX) };
-            if result != 0 {
-                let errno = std::io::Error::last_os_error();
-                return Err(IsolateError::Lock(format!(
-                    "Cannot lock instances file: {}",
-                    errno
-                )));
-            }
-        }
-
-        // Load current instances
-        let mut instances = if instances_file.exists() {
-            let content = fs::read_to_string(&instances_file)?;
-            if content.trim().is_empty() {
-                HashMap::new()
+        // Use the enhanced lock manager's file locking
+        with_file_lock(&instances_file, || {
+            // Load current instances
+            let mut instances = if instances_file.exists() {
+                let content = fs::read_to_string(&instances_file)?;
+                if content.trim().is_empty() {
+                    HashMap::new()
+                } else {
+                    serde_json::from_str(&content).map_err(|e| {
+                        crate::types::LockError::SystemError {
+                            message: format!("Failed to parse instances: {}", e),
+                        }
+                    })?
+                }
             } else {
-                serde_json::from_str(&content).map_err(|e| {
-                    IsolateError::Config(format!("Failed to parse instances: {}", e))
-                })?
-            }
-        } else {
-            HashMap::new()
-        };
+                HashMap::new()
+            };
 
-        // Apply update
-        update_fn(&mut instances);
+            // Apply update
+            update_fn(&mut instances);
 
-        // Write atomically (write to temp file, then rename)
-        let temp_file = instances_dir.join("instances.json.tmp");
-        let content = serde_json::to_string_pretty(&instances)
-            .map_err(|e| IsolateError::Config(format!("Failed to serialize instances: {}", e)))?;
+            // Write atomically
+            let temp_file = instances_dir.join("instances.json.tmp");
+            let content = serde_json::to_string_pretty(&instances).map_err(|e| {
+                crate::types::LockError::SystemError {
+                    message: format!("Failed to serialize instances: {}", e),
+                }
+            })?;
 
-        fs::write(&temp_file, content)?;
-        fs::rename(&temp_file, &instances_file)?;
+            fs::write(&temp_file, content)?;
+            fs::rename(&temp_file, &instances_file)?;
 
-        // Lock is automatically released when lock_file goes out of scope
-        Ok(())
+            Ok(())
+        })
+        .map_err(|e| match e {
+            crate::types::LockError::FilesystemError(io_err) => IsolateError::Io(io_err),
+            crate::types::LockError::SystemError { message } => IsolateError::Config(message),
+            _ => IsolateError::Lock(e.to_string()),
+        })
     }
 
     /// Acquire execution lock for loaded isolate (public version of acquire_lock)
     pub fn acquire_execution_lock(&mut self) -> Result<()> {
-        if self.lock_manager.is_some() {
+        if self.box_lock_guard.is_some() {
             return Ok(()); // Already have lock
         }
         self.acquire_lock(false)
@@ -592,12 +585,7 @@ impl Isolate {
 
     /// Release the lock (happens automatically on drop)
     fn release_lock(&mut self) {
-        if let Some(ref mut lock_manager) = self.lock_manager {
-            if let Err(e) = lock_manager.remove_lock() {
-                eprintln!("Warning: Failed to release lock: {}", e);
-            }
-        }
-        self.lock_manager = None;
+        self.box_lock_guard = None; // Lock guard automatically releases on drop
     }
 }
 
