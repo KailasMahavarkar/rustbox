@@ -701,26 +701,30 @@ fn main() -> Result<()> {
                 }
             );
 
-            let mut config = rustbox::types::IsolateConfig::default();
-            config.instance_id = format!("rustbox/{}", box_id);
+            // Load language-specific defaults from config.json first
+            let mut config = rustbox::types::IsolateConfig::with_language_defaults(
+                &language, 
+                format!("rustbox/{}", box_id)
+            )?;
             config.strict_mode = strict; // Use user-specified strict mode
 
-            // Apply resource limits if specified
+            // Apply CLI overrides if specified (these override config.json values)
             if let Some(mem) = mem {
                 config.memory_limit = Some(mem * 1024 * 1024); // Convert MB to bytes
-                eprintln!("Memory limit: {} MB", mem);
+                eprintln!("🔧 CLI Override - Memory limit: {} MB", mem);
             }
             if let Some(cpu_limit) = cpu.or(time) {
                 config.cpu_time_limit = Some(std::time::Duration::from_secs(cpu_limit));
-                eprintln!("CPU time limit: {} seconds", cpu_limit);
+                config.time_limit = Some(std::time::Duration::from_secs(cpu_limit));
+                eprintln!("🔧 CLI Override - CPU time limit: {} seconds", cpu_limit);
             }
             if let Some(wall_limit) = wall_time {
                 config.wall_time_limit = Some(std::time::Duration::from_secs(wall_limit));
-                eprintln!("Wall time limit: {} seconds", wall_limit);
+                eprintln!("🔧 CLI Override - Wall time limit: {} seconds", wall_limit);
             }
             if let Some(proc_limit) = processes {
                 config.process_limit = Some(proc_limit);
-                eprintln!("Process limit: {}", proc_limit);
+                eprintln!("🔧 CLI Override - Process limit: {}", proc_limit);
             }
 
             let mut isolate = rustbox::isolate::Isolate::new(config)?;

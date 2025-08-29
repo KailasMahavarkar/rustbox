@@ -2,6 +2,7 @@
 //! Inspired by IOI Isolate, focused on secure process execution with cgroup-v1 support
 
 pub mod cgroup;
+pub mod config;
 pub mod executor;
 pub mod filesystem;
 pub mod isolate;
