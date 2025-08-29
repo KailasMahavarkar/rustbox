@@ -253,7 +253,10 @@ impl RustboxLockManager {
         let current_locks = self.active_locks.load(Ordering::Acquire);
         if current_locks >= MAX_CONCURRENT_LOCKS {
             return Err(LockError::SystemError {
-                message: format!("Too many concurrent locks: {}/{}", current_locks, MAX_CONCURRENT_LOCKS),
+                message: format!(
+                    "Too many concurrent locks: {}/{}",
+                    current_locks, MAX_CONCURRENT_LOCKS
+                ),
             });
         }
 
@@ -261,7 +264,10 @@ impl RustboxLockManager {
         let lock_path = self.lock_dir.join(format!("box-{}.lock", box_id));
         let heartbeat_path = self.lock_dir.join(format!("box-{}.heartbeat", box_id));
 
-        info!("Attempting to acquire lock for box {} (active locks: {})", box_id, current_locks);
+        info!(
+            "Attempting to acquire lock for box {} (active locks: {})",
+            box_id, current_locks
+        );
 
         // Step 1: Clean any stale lock first
         if let Err(e) = self.cleanup_stale_lock_if_needed(box_id) {
@@ -376,7 +382,7 @@ impl RustboxLockManager {
 
         // Step 7: Increment active lock counter
         self.active_locks.fetch_add(1, Ordering::Release);
-        
+
         // Step 8: Return RAII guard
         Ok(BoxLockGuard {
             lock: Some(Arc::new(Mutex::new(lock))),
@@ -819,7 +825,7 @@ impl Drop for BoxLockGuard {
                     if let Err(e) = lock.heartbeat_shutdown.send(()) {
                         warn!("Failed to send shutdown signal to heartbeat thread: {}", e);
                     }
-                    
+
                     // Extract the thread handle so we can join it outside the lock
                     lock.heartbeat_handle.take()
                 } else {
@@ -827,29 +833,27 @@ impl Drop for BoxLockGuard {
                     None
                 }
             };
-            
+
             // Wait for thread completion with timeout outside the lock
             if let Some(handle) = handle_option {
                 // Use a simple timeout approach
                 // Since we can't easily timeout join(), we'll give it a short grace period
                 // and then let the thread cleanup naturally when the process exits
-                
+
                 // Give the shutdown signal time to reach the thread
                 thread::sleep(Duration::from_millis(100));
-                
+
                 // Try to join with a very short timeout by using a separate thread
                 let (tx, rx) = crossbeam_channel::bounded(1);
-                std::thread::spawn(move || {
-                    match handle.join() {
-                        Ok(()) => {
-                            let _ = tx.send(Ok(()));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Err(format!("{:?}", e)));
-                        }
+                std::thread::spawn(move || match handle.join() {
+                    Ok(()) => {
+                        let _ = tx.send(Ok(()));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("{:?}", e)));
                     }
                 });
-                
+
                 // Wait up to 2 seconds for thread to finish
                 match rx.recv_timeout(Duration::from_secs(2)) {
                     Ok(Ok(())) => {
@@ -875,10 +879,15 @@ impl Drop for DropGuard {
 
         let _ = std::fs::remove_file(lock_path);
         let _ = std::fs::remove_file(heartbeat_path);
-        
+
         // Decrement the active lock counter
         let prev_count = self.active_locks_counter.fetch_sub(1, Ordering::Release);
-        info!("Lock released for box {} (active locks: {} -> {})", self.box_id, prev_count, prev_count - 1);
+        info!(
+            "Lock released for box {} (active locks: {} -> {})",
+            self.box_id,
+            prev_count,
+            prev_count - 1
+        );
     }
 }
 

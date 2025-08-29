@@ -1,9 +1,9 @@
+use crate::types::{IsolateConfig, IsolateError, Result};
 /// Configuration loading from config.json
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
-use crate::types::{IsolateConfig, Result, IsolateError};
 
 /// Language-specific configuration from config.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,10 +106,10 @@ impl RustBoxConfig {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let config_content = std::fs::read_to_string(path)
             .map_err(|e| IsolateError::Config(format!("Failed to read config file: {}", e)))?;
-        
+
         let config: RustBoxConfig = serde_json::from_str(&config_content)
             .map_err(|e| IsolateError::Config(format!("Failed to parse config JSON: {}", e)))?;
-        
+
         Ok(config)
     }
 
@@ -118,13 +118,13 @@ impl RustBoxConfig {
         let config_path = std::env::current_dir()
             .map_err(|e| IsolateError::Config(format!("Failed to get current directory: {}", e)))?
             .join("config.json");
-        
+
         if !config_path.exists() {
             return Err(IsolateError::Config(
-                "config.json not found in current directory".to_string()
+                "config.json not found in current directory".to_string(),
             ));
         }
-        
+
         Self::load_from_file(config_path)
     }
 
@@ -147,8 +147,10 @@ impl IsolateConfig {
                 config.memory_limit = Some(lang_config.memory.limit_mb * 1024 * 1024);
 
                 // Apply time limits - this is the key fix!
-                config.cpu_time_limit = Some(Duration::from_secs(lang_config.time.cpu_time_seconds));
-                config.wall_time_limit = Some(Duration::from_secs(lang_config.time.wall_time_seconds));
+                config.cpu_time_limit =
+                    Some(Duration::from_secs(lang_config.time.cpu_time_seconds));
+                config.wall_time_limit =
+                    Some(Duration::from_secs(lang_config.time.wall_time_seconds));
                 config.time_limit = Some(Duration::from_secs(lang_config.time.cpu_time_seconds));
 
                 // Apply process limits
@@ -161,10 +163,16 @@ impl IsolateConfig {
                 eprintln!("📋 Loaded config.json defaults for {}:", language);
                 eprintln!("   Memory: {} MB", lang_config.memory.limit_mb);
                 eprintln!("   CPU time: {} seconds", lang_config.time.cpu_time_seconds);
-                eprintln!("   Wall time: {} seconds", lang_config.time.wall_time_seconds);
+                eprintln!(
+                    "   Wall time: {} seconds",
+                    lang_config.time.wall_time_seconds
+                );
                 eprintln!("   Max processes: {}", lang_config.processes.max_processes);
             } else {
-                eprintln!("⚠️  Warning: Language '{}' not found in config.json, using defaults", language);
+                eprintln!(
+                    "⚠️  Warning: Language '{}' not found in config.json, using defaults",
+                    language
+                );
             }
         } else {
             eprintln!("⚠️  Warning: Could not load config.json, using hardcoded defaults");

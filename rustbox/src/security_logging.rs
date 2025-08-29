@@ -1,6 +1,5 @@
 /// Security event logging framework for rustbox
 /// Provides structured logging of security-relevant events for compliance and incident response
-
 use crate::types::{IsolateError, Result};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -82,23 +81,23 @@ impl SecurityEvent {
             file_path: None,
         }
     }
-    
+
     /// Builder pattern methods for optional fields
     pub fn with_box_id(mut self, box_id: u32) -> Self {
         self.box_id = Some(box_id);
         self
     }
-    
+
     pub fn with_command(mut self, command: String) -> Self {
         self.command = Some(command);
         self
     }
-    
+
     pub fn with_file_path(mut self, file_path: String) -> Self {
         self.file_path = Some(file_path);
         self
     }
-    
+
     pub fn with_severity(mut self, severity: SecuritySeverity) -> Self {
         self.severity = severity;
         self
@@ -115,16 +114,18 @@ impl SecurityLogger {
     /// Create a new security logger
     pub fn new(audit_path: Option<PathBuf>) -> Result<Self> {
         let audit_path = audit_path.unwrap_or_else(|| {
-            std::env::temp_dir().join("rustbox").join("security-audit.log")
+            std::env::temp_dir()
+                .join("rustbox")
+                .join("security-audit.log")
         });
-        
+
         // Ensure parent directory exists
         if let Some(parent) = audit_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 IsolateError::Config(format!("Failed to create security log directory: {}", e))
             })?;
         }
-        
+
         let audit_file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -132,13 +133,13 @@ impl SecurityLogger {
             .map_err(|e| {
                 IsolateError::Config(format!("Failed to open security audit log: {}", e))
             })?;
-        
+
         Ok(Self {
             audit_file: Arc::new(Mutex::new(audit_file)),
             audit_path,
         })
     }
-    
+
     /// Log a security event
     pub fn log_security_event(&self, event: SecurityEvent) {
         // Create structured log entry
@@ -157,27 +158,39 @@ impl SecurityLogger {
             "file_path": event.file_path,
             "process_id": std::process::id(),
         });
-        
+
         // Log to standard logger based on severity
         match event.severity {
             SecuritySeverity::Critical => {
-                error!("SECURITY CRITICAL: {} - {}", 
-                    format!("{:?}", event.event_type), event.details);
+                error!(
+                    "SECURITY CRITICAL: {} - {}",
+                    format!("{:?}", event.event_type),
+                    event.details
+                );
             }
             SecuritySeverity::High => {
-                error!("SECURITY HIGH: {} - {}", 
-                    format!("{:?}", event.event_type), event.details);
+                error!(
+                    "SECURITY HIGH: {} - {}",
+                    format!("{:?}", event.event_type),
+                    event.details
+                );
             }
             SecuritySeverity::Medium => {
-                warn!("SECURITY MEDIUM: {} - {}", 
-                    format!("{:?}", event.event_type), event.details);
+                warn!(
+                    "SECURITY MEDIUM: {} - {}",
+                    format!("{:?}", event.event_type),
+                    event.details
+                );
             }
             SecuritySeverity::Low => {
-                info!("SECURITY LOW: {} - {}", 
-                    format!("{:?}", event.event_type), event.details);
+                info!(
+                    "SECURITY LOW: {} - {}",
+                    format!("{:?}", event.event_type),
+                    event.details
+                );
             }
         }
-        
+
         // Write to audit file for compliance
         if let Ok(mut file) = self.audit_file.lock() {
             if let Err(e) = writeln!(file, "{}", log_entry) {
@@ -190,7 +203,7 @@ impl SecurityLogger {
             error!("Failed to acquire lock on security audit file");
         }
     }
-    
+
     /// Get the audit log file path
     pub fn audit_path(&self) -> &PathBuf {
         &self.audit_path
@@ -241,88 +254,88 @@ pub fn log_security_event(event: SecurityEvent) {
 /// Convenience functions for common security events
 pub mod events {
     use super::*;
-    
+
     /// Log a command injection attempt
     pub fn command_injection_attempt(command: String, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::CommandInjectionAttempt,
-            format!("Blocked potentially malicious command: {}", command)
+            format!("Blocked potentially malicious command: {}", command),
         )
         .with_command(command);
-        
+
         let event = if let Some(id) = box_id {
             event.with_box_id(id)
         } else {
             event
         };
-        
+
         log_security_event(event);
     }
-    
+
     /// Log a path traversal attempt
     pub fn path_traversal_attempt(path: String, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::PathTraversalAttempt,
-            format!("Blocked path traversal attempt: {}", path)
+            format!("Blocked path traversal attempt: {}", path),
         )
         .with_file_path(path);
-        
+
         let event = if let Some(id) = box_id {
             event.with_box_id(id)
         } else {
             event
         };
-        
+
         log_security_event(event);
     }
-    
+
     /// Log a resource limit violation
     pub fn resource_limit_exceeded(resource: String, limit: String, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::ResourceLimitExceeded,
-            format!("Resource limit exceeded: {} > {}", resource, limit)
+            format!("Resource limit exceeded: {} > {}", resource, limit),
         );
-        
+
         let event = if let Some(id) = box_id {
             event.with_box_id(id)
         } else {
             event
         };
-        
+
         log_security_event(event);
     }
-    
+
     /// Log unauthorized file access attempt
     pub fn unauthorized_file_access(file_path: String, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::UnauthorizedFileAccess,
-            format!("Blocked unauthorized file access: {}", file_path)
+            format!("Blocked unauthorized file access: {}", file_path),
         )
         .with_file_path(file_path);
-        
+
         let event = if let Some(id) = box_id {
             event.with_box_id(id)
         } else {
             event
         };
-        
+
         log_security_event(event);
     }
-    
+
     /// Log suspicious command execution
     pub fn suspicious_command(command: String, reason: String, box_id: Option<u32>) {
         let event = SecurityEvent::new(
             SecurityEventType::SuspiciousCommand,
-            format!("Suspicious command detected ({}): {}", reason, command)
+            format!("Suspicious command detected ({}): {}", reason, command),
         )
         .with_command(command);
-        
+
         let event = if let Some(id) = box_id {
             event.with_box_id(id)
         } else {
             event
         };
-        
+
         log_security_event(event);
     }
 }
@@ -331,65 +344,68 @@ pub mod events {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    
+
     #[test]
     fn test_security_event_creation() {
         let event = SecurityEvent::new(
             SecurityEventType::CommandInjectionAttempt,
-            "Test event".to_string()
+            "Test event".to_string(),
         );
-        
-        assert!(matches!(event.event_type, SecurityEventType::CommandInjectionAttempt));
+
+        assert!(matches!(
+            event.event_type,
+            SecurityEventType::CommandInjectionAttempt
+        ));
         assert!(matches!(event.severity, SecuritySeverity::Critical));
         assert_eq!(event.details, "Test event");
     }
-    
+
     #[test]
     fn test_security_event_builder() {
         let event = SecurityEvent::new(
             SecurityEventType::PathTraversalAttempt,
-            "Test path traversal".to_string()
+            "Test path traversal".to_string(),
         )
         .with_box_id(123)
         .with_file_path("/etc/passwd".to_string());
-        
+
         assert_eq!(event.box_id, Some(123));
         assert_eq!(event.file_path, Some("/etc/passwd".to_string()));
     }
-    
+
     #[test]
     fn test_security_logger() {
         let temp_dir = TempDir::new().unwrap();
         let audit_path = temp_dir.path().join("test-audit.log");
-        
+
         let logger = SecurityLogger::new(Some(audit_path.clone())).unwrap();
-        
+
         let event = SecurityEvent::new(
             SecurityEventType::SuspiciousCommand,
-            "Test logging".to_string()
+            "Test logging".to_string(),
         );
-        
+
         logger.log_security_event(event);
-        
+
         // Verify audit file was created and contains data
         assert!(audit_path.exists());
         let content = std::fs::read_to_string(&audit_path).unwrap();
         assert!(content.contains("SuspiciousCommand"));
         assert!(content.contains("Test logging"));
     }
-    
+
     #[test]
     fn test_event_convenience_functions() {
         // Initialize logger for testing
         let temp_dir = TempDir::new().unwrap();
         let audit_path = temp_dir.path().join("convenience-test.log");
         init_security_logger(Some(audit_path.clone())).unwrap();
-        
+
         // Test convenience functions
         events::command_injection_attempt("rm -rf /".to_string(), Some(456));
         events::path_traversal_attempt("../../../etc/passwd".to_string(), None);
         events::resource_limit_exceeded("memory".to_string(), "1GB".to_string(), Some(789));
-        
+
         // Verify events were logged
         std::thread::sleep(std::time::Duration::from_millis(100)); // Allow time for writes
         let content = std::fs::read_to_string(&audit_path).unwrap();

@@ -103,7 +103,7 @@ impl ProcessExecutor {
         if command.is_empty() {
             return Err(IsolateError::Config("Empty command provided".to_string()));
         }
-        
+
         // Use security module to validate and resolve command
         match command_validation::validate_and_resolve_command(&command[0]) {
             Ok(path) => Ok(path),
@@ -375,11 +375,13 @@ impl ProcessExecutor {
                             let box_id = self.config.instance_id.parse::<u32>().ok();
                             events::resource_limit_exceeded(
                                 "memory".to_string(),
-                                self.config.memory_limit.map(|m| format!("{} bytes", m))
+                                self.config
+                                    .memory_limit
+                                    .map(|m| format!("{} bytes", m))
                                     .unwrap_or_else(|| "unknown".to_string()),
-                                box_id
+                                box_id,
                             );
-                            
+
                             self.terminate_process(child_id);
                             let _ = child.wait();
 

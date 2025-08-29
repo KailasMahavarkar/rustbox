@@ -703,8 +703,8 @@ fn main() -> Result<()> {
 
             // Load language-specific defaults from config.json first
             let mut config = rustbox::types::IsolateConfig::with_language_defaults(
-                &language, 
-                format!("rustbox/{}", box_id)
+                &language,
+                format!("rustbox/{}", box_id),
             )?;
             config.strict_mode = strict; // Use user-specified strict mode
 
