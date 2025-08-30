@@ -3,6 +3,11 @@ name = "rustbox"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["core"]
+core = []
+zen = []
+
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -22,4 +27,3 @@ crossbeam-channel = "0.5"
 [[bin]]
 name = "rustbox"
 path = "src/main.rs"
-

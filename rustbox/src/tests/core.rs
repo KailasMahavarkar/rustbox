@@ -325,4 +325,21 @@ mod tests {
 
         assert!(TestUtils::validate_execution_result(&invalid_json).is_err());
     }
+
+    #[test]
+    fn test_core_test_run() {
+        let mut config = TestConfig::default();
+        config.verbose = true;
+        let results = run_core_tests(&config).unwrap();
+        assert!(!results.is_empty());
+        for result in results {
+            if !result.passed {
+                eprintln!("Test failed: {}", result.name);
+                if let Some(error) = &result.error_message {
+                    eprintln!("Error: {}", error);
+                }
+            }
+            assert!(result.passed);
+        }
+    }
 }

@@ -16,42 +16,51 @@ use std::time::Duration;
 pub fn run_stress_tests(config: &TestConfig) -> Result<Vec<TestResult>> {
     let mut results = Vec::new();
 
+    eprintln!("Running stress tests...");
     // Test 1: Sequential execution stress
+    eprintln!("Running sequential execution stress test...");
     results.push(run_test(config, "Sequential execution stress", || {
         test_sequential_execution_stress(config)
     }));
 
     // Test 2: Concurrent execution stress
+    eprintln!("Running concurrent execution stress test...");
     results.push(run_test(config, "Concurrent execution stress", || {
         test_concurrent_execution_stress(config)
     }));
 
     // Test 3: Memory pressure stress
+    eprintln!("Running memory pressure stress test...");
     results.push(run_test(config, "Memory pressure stress", || {
         test_memory_pressure_stress(config)
     }));
 
     // Test 4: CPU intensive stress
+    eprintln!("Running CPU intensive stress test...");
     results.push(run_test(config, "CPU intensive stress", || {
         test_cpu_intensive_stress(config)
     }));
 
     // Test 5: Resource contention stress
+    eprintln!("Running resource contention stress test...");
     results.push(run_test(config, "Resource contention stress", || {
         test_resource_contention_stress(config)
     }));
 
     // Test 6: Rapid box creation/destruction
+    eprintln!("Running rapid box creation/destruction test...");
     results.push(run_test(config, "Rapid box creation/destruction", || {
         test_rapid_box_cycle(config)
     }));
 
     // Test 7: Long running process stress
+    eprintln!("Running long running process stress test...");
     results.push(run_test(config, "Long running process stress", || {
         test_long_running_process_stress(config)
     }));
 
     // Test 8: System resource exhaustion
+    eprintln!("Running system resource exhaustion test...");
     results.push(run_test(config, "System resource exhaustion", || {
         test_system_resource_exhaustion(config)
     }));
@@ -651,5 +660,18 @@ mod tests {
         let guard = results.lock().unwrap();
         assert_eq!(guard.len(), 1);
         assert!(guard[0]);
+    }
+
+    #[test]
+    fn test_stress_test_run() {
+        let config = TestConfig::default();
+        let results = run_stress_tests(&config).unwrap();
+        assert!(!results.is_empty());
+        for result in results {
+            eprintln!("Test result: {}", result.name);
+            eprintln!("Test passed: {}", result.passed);
+            eprintln!("Test error message: {}", result.error_message.unwrap_or("None".to_string()));
+            assert!(result.passed);
+        }
     }
 }

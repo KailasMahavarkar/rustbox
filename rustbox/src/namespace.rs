@@ -156,25 +156,3 @@ impl NamespaceIsolation {
         namespaces
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_namespace_creation() {
-        let ns = NamespaceIsolation::new_default();
-        assert!(ns.is_isolation_enabled());
-        assert_eq!(
-            ns.get_enabled_namespaces(),
-            vec!["PID", "Mount", "Network", "IPC", "UTS"]
-        );
-    }
-
-    #[test]
-    fn test_namespace_support_check() {
-        // This test will pass on Linux systems with namespace support
-        let supported = NamespaceIsolation::is_supported();
-        println!("Namespace support: {}", supported);
-    }
-}

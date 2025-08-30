@@ -572,4 +572,14 @@ mod tests {
 
         assert_eq!(throughput, 2.0);
     }
+
+    #[test]
+    fn test_performance_test_run() {
+        let config = TestConfig::default();
+        let results = run_performance_tests(&config).unwrap();
+        assert!(!results.is_empty());
+        for result in results {
+            assert!(result.passed);
+        }
+    }
 }

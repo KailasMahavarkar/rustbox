@@ -141,6 +141,7 @@ impl Isolate {
         max_cpu: Option<u64>,
         max_memory: Option<u64>,
         max_time: Option<u64>,
+        max_wall_time: Option<u64>,
         fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         // Update last used timestamp
@@ -160,7 +161,11 @@ impl Isolate {
         }
 
         if let Some(time_seconds) = max_time {
-            config.wall_time_limit = Some(Duration::from_secs(time_seconds));
+            config.cpu_time_limit = Some(Duration::from_secs(time_seconds));
+        }
+
+        if let Some(wall_time_seconds) = max_wall_time {
+            config.wall_time_limit = Some(Duration::from_secs(wall_time_seconds));
         }
 
         if let Some(fd_limit_val) = fd_limit {
@@ -183,15 +188,16 @@ impl Isolate {
         max_cpu: Option<u64>,
         max_memory: Option<u64>,
         max_time: Option<u64>,
+        max_wall_time: Option<u64>,
         fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
             "python" | "py" => self
-                .execute_python_string(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
+                .execute_python_string(code, stdin_data, max_cpu, max_memory, max_time, max_wall_time, fd_limit),
             "cpp" | "c++" | "cxx" => self
-                .compile_and_execute_cpp(code, stdin_data, max_cpu, max_memory, max_time, fd_limit),
+                .compile_and_execute_cpp(code, stdin_data, max_cpu, max_memory, max_time, max_wall_time, fd_limit),
             "java" => self.compile_and_execute_java(
-                code, stdin_data, max_cpu, max_memory, max_time, fd_limit,
+                code, stdin_data, max_cpu, max_memory, max_time, max_wall_time, fd_limit,
             ),
             _ => Err(IsolateError::Config(format!(
                 "Unsupported language: {}",
@@ -208,6 +214,7 @@ impl Isolate {
         max_cpu: Option<u64>,
         max_memory: Option<u64>,
         max_time: Option<u64>,
+        max_wall_time: Option<u64>,
         fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         let command = vec![
@@ -217,7 +224,7 @@ impl Isolate {
             code.to_string(),
         ];
         self.execute_with_overrides(
-            &command, stdin_data, max_cpu, max_memory, max_time, fd_limit,
+            &command, stdin_data, max_cpu, max_memory, max_time, max_wall_time, fd_limit,
         )
     }
 
@@ -229,6 +236,7 @@ impl Isolate {
         max_cpu: Option<u64>,
         max_memory: Option<u64>,
         max_time: Option<u64>,
+        max_wall_time: Option<u64>,
         fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         // Write source code to file in sandbox
@@ -284,6 +292,7 @@ impl Isolate {
             max_cpu,
             max_memory,
             max_time,
+            max_wall_time,
             fd_limit,
         );
 
@@ -300,6 +309,7 @@ impl Isolate {
         max_cpu: Option<u64>,
         max_memory: Option<u64>,
         max_time: Option<u64>,
+        max_wall_time: Option<u64>,
         fd_limit: Option<u64>,
     ) -> Result<ExecutionResult> {
         // Extract class name from code (simple heuristic)
@@ -372,6 +382,7 @@ impl Isolate {
             max_cpu,
             max_memory,
             max_time,
+            max_wall_time,
             fd_limit,
         );
 

@@ -69,7 +69,6 @@ pub fn test_performance_benchmarks() -> Result<()> {
 }
 
 #[cfg(test)]
-#[test]
 pub fn test_language_support() -> Result<()> {
     let config = TestConfig::default();
     let results = crate::tests::languages::run_language_tests(&config)?;

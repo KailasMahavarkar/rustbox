@@ -612,4 +612,29 @@ mod tests {
         assert!(TestUtils::validate_output_contains(&json, "Hello").is_ok());
         assert!(TestUtils::validate_output_contains(&json, "Goodbye").is_err());
     }
+
+    #[test]
+    fn test_security_test_run() {
+        let mut config = TestConfig::default();
+        config.verbose = true;
+        let results = run_security_tests(&config).unwrap();
+        assert!(!results.is_empty());
+        for result in &results {
+            if !result.passed {
+                eprintln!("Security test failed: {}", result.name);
+                if let Some(error) = &result.error_message {
+                    eprintln!("Error: {}", error);
+                }
+            }
+            assert!(result.passed);
+        }
+        for result in results {
+            println!("Test result: {}", result.name);
+            println!("Test passed: {}", result.passed);
+            println!(
+                "Test error message: {}",
+                result.error_message.unwrap_or("None".to_string())
+            );
+        }
+    }
 }

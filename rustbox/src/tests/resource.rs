@@ -253,7 +253,14 @@ import sys
 
 # Allocate some memory
 data = [0] * 100000  # ~400KB
-time.sleep(1)  # Use some CPU time
+
+# Use actual CPU time with computation (not sleep)  
+result = 0
+for i in range(10000000):  # 10x more iterations
+    result += i * i
+    if i % 1000000 == 0:
+        pass  # Add some extra work
+    
 print('Resource monitoring test completed')";
 
     let result = execute_rustbox_command(
@@ -342,9 +349,9 @@ except MemoryError:
 
     let status = result.get("status").and_then(|s| s.as_str()).unwrap_or("");
 
-    if status != "Success" && status != "MemoryLimit" {
+    if status != "Success" && status != "MemoryLimit" && status != "Memory Limit Exceeded" {
         return Err(anyhow::anyhow!(
-            "Expected Success or MemoryLimit, got: {}",
+            "Expected Success or MemoryLimit or Memory Limit Exceeded, got: {}",
             status
         ));
     }
@@ -459,5 +466,31 @@ mod tests {
         assert_eq!(TestUtils::extract_memory_usage(&json), 2048);
         assert_eq!(TestUtils::extract_stdout(&json), "Hello");
         assert_eq!(TestUtils::extract_stderr(&json), "");
+    }
+
+    // run_resource_tests
+    #[test]
+    fn test_resource_test_run() {
+        let mut config = TestConfig::default();
+        config.verbose = true;
+        let results = run_resource_tests(&config).unwrap();
+        assert!(!results.is_empty());
+        for result in &results {
+            if !result.passed {
+                eprintln!("Resource test failed: {}", result.name);
+                if let Some(error) = &result.error_message {
+                    eprintln!("Error: {}", error);
+                }
+            }
+            assert!(result.passed);
+        }
+        for result in results {
+            println!("Test result: {}", result.name);
+            println!("Test passed: {}", result.passed);
+            println!(
+                "Test error message: {}",
+                result.error_message.unwrap_or("None".to_string())
+            );
+        }
     }
 }

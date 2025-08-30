@@ -271,7 +271,8 @@ fn main() -> Result<()> {
                         None, // stdin
                         cpu,
                         mem,
-                        time.or(wall_time),
+                        time,
+                        wall_time,
                         None, // fd_limit
                     )?;
 
@@ -425,7 +426,8 @@ fn main() -> Result<()> {
                         None, // stdin
                         cpu,
                         mem,
-                        time.or(wall_time),
+                        time,
+                        wall_time,
                         None, // fd_limit
                     )?;
 
@@ -505,7 +507,8 @@ fn main() -> Result<()> {
                         None, // stdin
                         cpu,
                         mem,
-                        time.or(wall_time),
+                        time,
+                        wall_time,
                         None, // fd_limit
                     )?;
 
@@ -579,7 +582,8 @@ fn main() -> Result<()> {
                     None, // stdin
                     cpu,
                     mem,
-                    time.or(wall_time),
+                    time,
+                    wall_time,
                     None, // fd_limit
                 )?;
 
@@ -736,7 +740,8 @@ fn main() -> Result<()> {
                 stdin.as_deref(),
                 cpu.or(time),
                 mem,
-                time.or(wall_time),
+                time,
+                wall_time,
                 None, // fd_limit
             )?;
 
