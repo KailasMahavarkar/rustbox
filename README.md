@@ -1,4 +1,4 @@
-# codejudge-like System with Rustbox
+# codejudge-like System with Rustbox (Vibe Coded -> NOT Production ready)
 
 A secure, scalable code execution system built with FastAPI, PostgreSQL, Redis, and powered by the rustbox sandboxing engine. This system provides a codejudge-compatible API for safe execution of untrusted code with comprehensive resource limits and isolation.
 
